@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Finance tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+
+  <body>
+    <div class="container">
+      <header>
+        <h1>Finance tracker</h1>
+        <p class="status" id="serverStatus">Checking server...</p>
+      </header>
+
+      <main>
+        <section class="card">
+          <h2>New transaction</h2>
+
+          <form id="addForm" class="form">
+            <div class="form-row">
+              <input type="text" id="userId" placeholder="User ID (UUID)" required />
+            </div>
+
+            <div class="form-row">
+              <input type="number" id="amount" placeholder="Amount" step="0.01" min="0.01" required />
+              <select id="currency" required>
+                <option value="">Currency</option>
+                <option value="RUB">RUB</option>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+              </select>
+            </div>
+
+            <div class="form-row">
+              <select id="type" required>
+                <option value="">Type</option>
+                <option value="income">income</option>
+                <option value="expense">expense</option>
+                <option value="transfer">transfer</option>
+              </select>
+
+              <select id="txStatus" required>
+                <option value="">Status</option>
+                <option value="pending">pending</option>
+                <option value="done">done</option>
+                <option value="failed">failed</option>
+              </select>
+            </div>
+
+            <!-- accounts -->
+            <div class="form-row" id="fromAccountRow">
+              <input
+                type="text"
+                id="fromAccountId"
+                placeholder="From account ID (UUID)"
+              />
+            </div>
+
+            <div class="form-row" id="toAccountRow">
+              <input
+                type="text"
+                id="toAccountId"
+                placeholder="To account ID (UUID)"
+              />
+            </div>
+
+            <div class="form-row">
+              <input type="datetime-local" id="occurredAt" required />
+            </div>
+
+            <div class="form-row">
+              <input type="text" id="description" placeholder="Description (optional)" />
+            </div>
+
+            <button type="submit" class="btn btn-primary">Create</button>
+          </form>
+
+        </section>
+
+        <section class="card">
+          <h2>Analytics</h2>
+
+          <div class="analytics-form">
+            <input type="text" id="analyticsUserId" placeholder="User ID (UUID)" />
+            <input type="datetime-local" id="analyticsFrom" />
+            <input type="datetime-local" id="analyticsTo" />
+            <button class="btn btn-secondary" type="button" onclick="getAnalytics()">Get analytics</button>
+          </div>
+
+          <div id="analyticsResult" class="analytics-result hidden">
+            <div class="analytics-grid">
+              <div class="stat">
+                <span class="label">Sum</span>
+                <span class="value" id="statSum">-</span>
+              </div>
+              <div class="stat">
+                <span class="label">Avg</span>
+                <span class="value" id="statAvg">-</span>
+              </div>
+              <div class="stat">
+                <span class="label">Count</span>
+                <span class="value" id="statCount">-</span>
+              </div>
+              <div class="stat">
+                <span class="label">Median</span>
+                <span class="value" id="statMedian">-</span>
+              </div>
+              <div class="stat">
+                <span class="label">P90</span>
+                <span class="value" id="statP90">-</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Transactions</h2>
+
+          <div class="table-controls">
+            <input type="text" id="listUserId" placeholder="User ID (UUID)" />
+            <button class="btn btn-secondary" type="button" onclick="listTransactions()">Load</button>
+          </div>
+
+          <div id="tableContainer" class="table-container hidden">
+            <table id="transactionsTable">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Amount</th>
+                  <th>Currency</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div id="editModal" class="modal hidden">
+          <div class="modal-content">
+            <span class="close" onclick="closeEditModal()">&times;</span>
+            <h2>Edit transaction</h2>
+
+            <form id="editForm" class="form">
+              <input type="hidden" id="editId" />
+              <input type="hidden" id="editUserId" />
+
+              <div class="form-row">
+                <input type="number" id="editAmount" placeholder="Amount" step="0.01" required />
+                <select id="editCurrency" required>
+                  <option value="RUB">RUB</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                </select>
+              </div>
+
+              <div class="form-row">
+                <select id="editType" required>
+                  <option value="income">income</option>
+                  <option value="expense">expense</option>
+                  <option value="transfer">transfer</option>
+                </select>
+
+                <select id="editStatus" required>
+                  <option value="pending">pending</option>
+                  <option value="done">done</option>
+                  <option value="failed">failed</option>
+                </select>
+              </div>
+
+              <div class="form-row" id="editFromAccountRow">
+                <input
+                  type="text"
+                  id="editFromAccountId"
+                  placeholder="From account ID (UUID)"
+                />
+              </div>
+
+              <div class="form-row" id="editToAccountRow">
+                <input
+                  type="text"
+                  id="editToAccountId"
+                  placeholder="To account ID (UUID)"
+                />
+              </div>
+
+              <div class="form-row">
+                <input type="datetime-local" id="editOccurredAt" required />
+              </div>
+
+              <button type="submit" class="btn btn-primary">Save</button>
+            </form>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
