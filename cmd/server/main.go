@@ -52,10 +52,11 @@ func main() {
 		Provider:    repository.NewProviderRepository(database),
 		Transaction: repository.NewTransactionRepository(database),
 		Analytics:   repository.NewAnalyticsRepository(database),
+		Idempotency: repository.NewIdempotencyRepository(database),
 	}
 
 	services := service.NewServices(repos)
-	handlers := implementation.NewHandlers(services)
+	handlers := implementation.NewHandlers(services, repos, database)
 
 	router := http.NewServeMux()
 
@@ -69,6 +70,7 @@ func main() {
 		Use(middleware.Recovery)
 
 	router.Handle("GET /health", http.HandlerFunc(handlers.Health().Health))
+	router.Handle("GET /ready", http.HandlerFunc(handlers.Health().Ready))
 
 	txHandler := handlers.Transaction()
 	router.Handle("POST /items", http.HandlerFunc(txHandler.CreateTransaction))

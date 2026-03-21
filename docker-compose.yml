@@ -4,7 +4,7 @@ services:
     container_name: diploma_app
     # Снаружи 8081, чтобы не конфликтовать с локальным `make run` на :8080
     ports:
-      - "8081:8080"
+      - "${APP_HTTP_PORT:-8081}:8080"
     env_file:
       - environment/.env
     environment:
@@ -21,7 +21,7 @@ services:
     env_file:
       - environment/.env
     ports:
-      - "28436:5432"
+      - "${POSTGRES_HOST_PORT:-28436}:5432"
     volumes:
       - L3_6_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -37,11 +37,27 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - app
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: diploma_grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: dark
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3000}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
 
 volumes:
   L3_6_pgdata:

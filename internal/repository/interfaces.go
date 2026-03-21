@@ -46,12 +46,24 @@ type AnalyticsRepository interface {
 	GetPercentile90(ctx context.Context, userID string, from, to string) (string, error)
 }
 
+type IdempotencyRecord struct {
+	BodyHash     []byte
+	HTTPStatus   int
+	ResponseJSON []byte
+}
+
+type IdempotencyRepository interface {
+	Get(ctx context.Context, userID, idempotencyKey string) (*IdempotencyRecord, error)
+	Save(ctx context.Context, userID, idempotencyKey string, bodyHash []byte, httpStatus int, responseJSON []byte) error
+}
+
 // Структура для инъекции зависимостей в сервисный слой
 type Repositories struct {
-	User        UserRepository
-	Account     AccountRepository
-	Category    CategoryRepository
-	Provider    ProviderRepository
-	Transaction TransactionRepository
-	Analytics   AnalyticsRepository
+	User         UserRepository
+	Account      AccountRepository
+	Category     CategoryRepository
+	Provider     ProviderRepository
+	Transaction  TransactionRepository
+	Analytics    AnalyticsRepository
+	Idempotency  IdempotencyRepository
 }

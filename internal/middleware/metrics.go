@@ -36,6 +36,8 @@ func normalizeRouteLabel(path string) string {
 		return "/"
 	case path == "/health":
 		return "/health"
+	case path == "/ready":
+		return "/ready"
 	case path == "/metrics":
 		return "/metrics"
 	case path == "/analytics":

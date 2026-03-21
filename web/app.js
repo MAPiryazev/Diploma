@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8080";
+const API_BASE = window.location.origin;
 
 document.addEventListener("DOMContentLoaded", () => {
   checkHealth();
@@ -27,9 +27,14 @@ function setServerStatus(text, color) {
 
 function checkHealth() {
   fetch(`${API_BASE}/health`)
-    .then((r) => r.json())
+    .then(async (r) => {
+      if (!r.ok) {
+        throw new Error(await readErrorMessage(r));
+      }
+      return r.json();
+    })
     .then(() => setServerStatus("Server is OK", "#27ae60"))
-    .catch(() => setServerStatus("Server is unavailable", "#e74c3c"));
+    .catch((err) => setServerStatus(`Server is unavailable: ${err.message}`, "#e74c3c"));
 }
 
 function applyAccountRules(type) {
@@ -120,26 +125,22 @@ function addTransaction(e) {
     payload.to_account_id = null;
   }
 
-  fetch(`${API_BASE}/items`, {
+  apiFetch(`${API_BASE}/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-    .then((r) => r.json())
     .then((data) => {
-      if (data.status === "success") {
-        alert("Transaction created");
-        document.getElementById("addForm").reset();
-        applyAccountRules(document.getElementById("type").value);
+      alert("Transaction created");
+      document.getElementById("addForm").reset();
+      applyAccountRules(document.getElementById("type").value);
 
-        if (document.getElementById("listUserId").value) {
-          listTransactions();
-        }
-        return;
+      if (document.getElementById("listUserId").value) {
+        listTransactions();
       }
-      alert(`Request error: ${data.message || "unknown error"}`);
+      return data;
     })
-    .catch((err) => alert(`Network error: ${err.message}`));
+    .catch((err) => alert(err.message));
 }
 
 function listTransactions() {
@@ -149,14 +150,8 @@ function listTransactions() {
     return;
   }
 
-  fetch(`${API_BASE}/items?user_id=${encodeURIComponent(userId)}`)
-    .then((r) => r.json())
+  apiFetch(`${API_BASE}/items?user_id=${encodeURIComponent(userId)}`)
     .then((data) => {
-      if (data.status === "error") {
-        alert(`Request error: ${data.message || "unknown error"}`);
-        return;
-      }
-
       const tbody = document.getElementById("tableBody");
       tbody.innerHTML = "";
 
@@ -194,7 +189,7 @@ function listTransactions() {
 
       document.getElementById("tableContainer").classList.remove("hidden");
     })
-    .catch((err) => alert(`Network error: ${err.message}`));
+    .catch((err) => alert(err.message));
 }
 
 function openEditModal(tx) {
@@ -253,41 +248,33 @@ function updateTransaction(e) {
     payload.to_account_id = null;
   }
 
-  fetch(`${API_BASE}/items/${encodeURIComponent(id)}`, {
+  apiFetch(`${API_BASE}/items/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   })
-    .then((r) => r.json())
     .then((data) => {
-      if (data.status === "success") {
-        alert("Transaction updated");
-        closeEditModal();
-        listTransactions();
-        return;
-      }
-      alert(`Request error: ${data.message || "unknown error"}`);
+      alert("Transaction updated");
+      closeEditModal();
+      listTransactions();
+      return data;
     })
-    .catch((err) => alert(`Network error: ${err.message}`));
+    .catch((err) => alert(err.message));
 }
 
 function deleteTransaction(id, userId) {
   const ok = confirm("Delete transaction?");
   if (!ok) return;
 
-  fetch(`${API_BASE}/items/${encodeURIComponent(id)}?user_id=${encodeURIComponent(userId)}`, {
+  apiFetch(`${API_BASE}/items/${encodeURIComponent(id)}?user_id=${encodeURIComponent(userId)}`, {
     method: "DELETE",
   })
-    .then((r) => r.json())
     .then((data) => {
-      if (data.status === "success") {
-        alert("Transaction deleted");
-        listTransactions();
-        return;
-      }
-      alert(`Request error: ${data.message || "unknown error"}`);
+      alert("Transaction deleted");
+      listTransactions();
+      return data;
     })
-    .catch((err) => alert(`Network error: ${err.message}`));
+    .catch((err) => alert(err.message));
 }
 
 function getAnalytics() {
@@ -303,18 +290,12 @@ function getAnalytics() {
   const fromISO = new Date(from).toISOString();
   const toISO = new Date(to).toISOString();
 
-  fetch(
+  apiFetch(
     `${API_BASE}/analytics?user_id=${encodeURIComponent(userId)}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(
       toISO
     )}`
   )
-    .then((r) => r.json())
     .then((data) => {
-      if (data.status === "error") {
-        alert(`Request error: ${data.message || "unknown error"}`);
-        return;
-      }
-
       document.getElementById("statSum").textContent = data?.data?.sum ?? "-";
       document.getElementById("statAvg").textContent = data?.data?.avg ?? "-";
       document.getElementById("statCount").textContent = data?.data?.count ?? "-";
@@ -323,7 +304,7 @@ function getAnalytics() {
 
       document.getElementById("analyticsResult").classList.remove("hidden");
     })
-    .catch((err) => alert(`Network error: ${err.message}`));
+    .catch((err) => alert(err.message));
 }
 
 function normalizeOptional(s) {
@@ -338,4 +319,40 @@ function escapeHtml(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+async function apiFetch(url, options = {}) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (err) {
+    throw new Error(`Network error: ${err.message}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const data = await safeReadJSON(response);
+  if (data?.status === "error") {
+    throw new Error(`Request error: ${data.message || "unknown error"}`);
+  }
+
+  return data;
+}
+
+async function readErrorMessage(response) {
+  const data = await safeReadJSON(response);
+  if (data?.message) {
+    return `Request error (${response.status}): ${data.message}`;
+  }
+  return `Request error (${response.status}): ${response.statusText || "unexpected response"}`;
+}
+
+async function safeReadJSON(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }

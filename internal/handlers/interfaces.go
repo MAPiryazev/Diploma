@@ -16,6 +16,7 @@ type AnalyticsHandler interface {
 
 type HealthHandler interface {
 	Health(w http.ResponseWriter, r *http.Request)
+	Ready(w http.ResponseWriter, r *http.Request)
 }
 
 type Handlers interface {
