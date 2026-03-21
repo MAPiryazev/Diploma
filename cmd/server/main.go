@@ -12,6 +12,7 @@ import (
 
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/config"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/db"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/handlers/implementation"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/middleware"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/repository"
@@ -56,7 +57,18 @@ func main() {
 	}
 
 	services := service.NewServices(repos)
-	handlers := implementation.NewHandlers(services, repos, database)
+
+	publisher, err := events.NewKafkaPublisher(cfg.Kafka.Brokers, cfg.Kafka.Topic)
+	if err != nil {
+		log.Fatalf("failed to init kafka publisher: %v", err)
+	}
+	defer func() {
+		if err := publisher.Close(); err != nil {
+			log.Printf("kafka publisher close error: %v", err)
+		}
+	}()
+
+	handlers := implementation.NewHandlers(services, repos, database, publisher)
 
 	router := http.NewServeMux()
 

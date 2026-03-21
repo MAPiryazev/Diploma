@@ -11,9 +11,42 @@ services:
       # Внутри сети compose — сервис БД, порт 5432
       POSTGRES_HOST: L3.6_db
       POSTGRES_PORT: "5432"
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
     depends_on:
       L3.6_db:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  consumer:
+    build: .
+    container_name: diploma_consumer
+    working_dir: /app/cmd/consumer
+    command: ["./consumer"]
+    env_file:
+      - environment/.env
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      KAFKA_CONSUMER_GROUP_ID: ${KAFKA_CONSUMER_GROUP_ID:-diploma-transactions-consumer}
+      CONSUMER_METRICS_PORT: "2112"
+      POSTGRES_HOST: L3.6_db
+      POSTGRES_PORT: "5432"
+    ports:
+      - "${CONSUMER_METRICS_PORT:-2112}:2112"
+    depends_on:
+      L3.6_db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      app:
+        condition: service_started
 
   L3.6_db:
     image: postgres:16-alpine
@@ -42,6 +75,19 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - app
+      - consumer
+      - kafka-exporter
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: diploma_kafka_exporter
+    command:
+      - "--kafka.server=kafka:9092"
+    ports:
+      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
 
   grafana:
     image: grafana/grafana:latest
@@ -59,5 +105,49 @@ services:
     depends_on:
       - prometheus
 
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: diploma_kafka
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-9094}:9094"
+    environment:
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:${KAFKA_EXTERNAL_PORT:-9094}
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9094
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: diploma_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      sh -c "kafka-topics --bootstrap-server kafka:9092
+      --create --if-not-exists --topic ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      --replication-factor 1 --partitions ${KAFKA_TRANSACTIONS_PARTITIONS:-3} &&
+      kafka-topics --bootstrap-server kafka:9092
+      --create --if-not-exists --topic ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      --replication-factor 1 --partitions 1"
+
 volumes:
   L3_6_pgdata:
+  kafka_data:

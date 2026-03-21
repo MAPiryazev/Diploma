@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,6 +16,9 @@ import (
 
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/config"
 )
+
+// migrationLockID: сериализация миграций (раньше app и consumer параллельно ловили duplicate key на pg_type).
+const migrationLockID int64 = 87236501
 
 func Connect(cfg *config.Config) (*dbpg.DB, error) {
 	masterDSN := fmt.Sprintf(
@@ -52,11 +56,24 @@ func RunMigrations(db *dbpg.DB, migrationDir ...string) error {
 
 	ctx := context.Background()
 
-	if err := ensureMigrationsTable(ctx, db); err != nil {
+	conn, err := db.Master.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire db connection for migrations: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
+		return fmt.Errorf("migration advisory lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockID)
+	}()
+
+	if err := ensureMigrationsTable(ctx, conn); err != nil {
 		return err
 	}
 
-	applied, err := loadAppliedMigrations(ctx, db)
+	applied, err := loadAppliedMigrations(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -87,7 +104,7 @@ func RunMigrations(db *dbpg.DB, migrationDir ...string) error {
 	sort.Strings(files)
 
 	for _, path := range files {
-		if err := applyMigrationFile(ctx, db, path); err != nil {
+		if err := applyMigrationFile(ctx, conn, path); err != nil {
 			return err
 		}
 	}
@@ -95,22 +112,22 @@ func RunMigrations(db *dbpg.DB, migrationDir ...string) error {
 	return nil
 }
 
-func ensureMigrationsTable(ctx context.Context, db *dbpg.DB) error {
+func ensureMigrationsTable(ctx context.Context, conn *sql.Conn) error {
 	const q = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
 	filename TEXT PRIMARY KEY,
 	applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )`
-	if _, err := db.Master.ExecContext(ctx, q); err != nil {
+	if _, err := conn.ExecContext(ctx, q); err != nil {
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 	return nil
 }
 
-func loadAppliedMigrations(ctx context.Context, db *dbpg.DB) (map[string]bool, error) {
+func loadAppliedMigrations(ctx context.Context, conn *sql.Conn) (map[string]bool, error) {
 	const q = `SELECT filename FROM schema_migrations`
 
-	rows, err := db.QueryContext(ctx, q)
+	rows, err := conn.QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("select schema_migrations: %w", err)
 	}
@@ -131,7 +148,7 @@ func loadAppliedMigrations(ctx context.Context, db *dbpg.DB) (map[string]bool, e
 	return applied, nil
 }
 
-func applyMigrationFile(ctx context.Context, db *dbpg.DB, path string) error {
+func applyMigrationFile(ctx context.Context, conn *sql.Conn, path string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -145,7 +162,7 @@ func applyMigrationFile(ctx context.Context, db *dbpg.DB, path string) error {
 		return nil
 	}
 
-	tx, err := db.Master.BeginTx(ctx, nil)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration tx: %w", err)
 	}

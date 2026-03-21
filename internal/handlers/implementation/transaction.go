@@ -2,6 +2,7 @@ package implementation
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,8 @@ import (
 	"sync"
 
 	apperrors "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/errors"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/repository"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/service"
@@ -19,13 +22,14 @@ import (
 )
 
 type transactionHandler struct {
-	svc    service.TransactionService
-	idem   repository.IdempotencyRepository
-	idemMu sync.Mutex
+	svc       service.TransactionService
+	idem      repository.IdempotencyRepository
+	publisher events.Publisher
+	idemMu    sync.Mutex
 }
 
-func newTransactionHandler(svc service.TransactionService, idem repository.IdempotencyRepository) *transactionHandler {
-	return &transactionHandler{svc: svc, idem: idem}
+func newTransactionHandler(svc service.TransactionService, idem repository.IdempotencyRepository, publisher events.Publisher) *transactionHandler {
+	return &transactionHandler{svc: svc, idem: idem, publisher: publisher}
 }
 
 func (h *transactionHandler) CreateTransaction(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +94,7 @@ func (h *transactionHandler) createTransactionIdempotent(
 	}
 
 	observability.RecordTransactionCreated(tx.Type, tx.Status)
+	h.publishTransactionCreatedEvent(ctx, tx)
 
 	payload := map[string]interface{}{
 		"status": "success",
@@ -119,6 +124,7 @@ func (h *transactionHandler) createTransactionOnce(w http.ResponseWriter, r *htt
 	}
 
 	observability.RecordTransactionCreated(tx.Type, tx.Status)
+	h.publishTransactionCreatedEvent(ctx, tx)
 
 	respondJSON(w, http.StatusCreated, map[string]interface{}{
 		"status": "success",
@@ -212,4 +218,14 @@ func (h *transactionHandler) DeleteTransaction(w http.ResponseWriter, r *http.Re
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "success",
 	})
+}
+
+func (h *transactionHandler) publishTransactionCreatedEvent(ctx context.Context, tx *models.Transaction) {
+	if h.publisher == nil {
+		return
+	}
+
+	if err := h.publisher.PublishTransactionCreated(ctx, tx); err != nil {
+		log.Printf("kafka publish transaction.created failed: %v", err)
+	}
 }
