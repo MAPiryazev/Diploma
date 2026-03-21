@@ -13,7 +13,14 @@ func Recovery(next http.Handler) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
 				fmt.Fprintf(w, `{"status":"error","message":"internal server error"}`)
-				log.Printf("[PANIC] %v on %s %s", err, r.Method, r.RequestURI)
+				log.Printf(
+					"level=error msg=%q method=%s path=%q request_id=%s panic=%v",
+					"recovered from panic",
+					r.Method,
+					r.RequestURI,
+					GetRequestID(r.Context()),
+					err,
+				)
 			}
 		}()
 

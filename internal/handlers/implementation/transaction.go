@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/service"
 )
 
@@ -28,6 +29,8 @@ func (h *transactionHandler) CreateTransaction(w http.ResponseWriter, r *http.Re
 		handleServiceError(w, err)
 		return
 	}
+
+	observability.RecordTransactionCreated(tx.Type, tx.Status)
 
 	respondJSON(w, http.StatusCreated, map[string]interface{}{
 		"status": "success",

@@ -1,4 +1,20 @@
 services:
+  app:
+    build: .
+    container_name: diploma_app
+    # Снаружи 8081, чтобы не конфликтовать с локальным `make run` на :8080
+    ports:
+      - "8081:8080"
+    env_file:
+      - environment/.env
+    environment:
+      # Внутри сети compose — сервис БД, порт 5432
+      POSTGRES_HOST: L3.6_db
+      POSTGRES_PORT: "5432"
+    depends_on:
+      L3.6_db:
+        condition: service_healthy
+
   L3.6_db:
     image: postgres:16-alpine
     container_name: L3.6_db
@@ -14,6 +30,18 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: diploma_prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - app
 
 volumes:
   L3_6_pgdata:

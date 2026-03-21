@@ -16,6 +16,7 @@ import (
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/middleware"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/repository"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/service"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -59,40 +60,29 @@ func main() {
 	router := http.NewServeMux()
 
 	router.Handle("/", http.FileServer(http.Dir("../../web")))
+	router.Handle("GET /metrics", promhttp.Handler())
 
 	chain := middleware.NewChain().
-		Use(middleware.Recovery).
-		Use(middleware.Logger)
+		Use(middleware.RequestID).
+		Use(middleware.Logger).
+		Use(middleware.Metrics).
+		Use(middleware.Recovery)
 
-	router.Handle("GET /health", chain.Handle(
-		http.HandlerFunc(handlers.Health().Health),
-	))
+	router.Handle("GET /health", http.HandlerFunc(handlers.Health().Health))
 
 	txHandler := handlers.Transaction()
-	router.Handle("POST /items", chain.Handle(
-		http.HandlerFunc(txHandler.CreateTransaction),
-	))
-	router.Handle("GET /items", chain.Handle(
-		http.HandlerFunc(txHandler.ListTransactions),
-	))
-	router.Handle("GET /items/{id}", chain.Handle(
-		http.HandlerFunc(txHandler.GetTransaction),
-	))
-	router.Handle("PUT /items/{id}", chain.Handle(
-		http.HandlerFunc(txHandler.UpdateTransaction),
-	))
-	router.Handle("DELETE /items/{id}", chain.Handle(
-		http.HandlerFunc(txHandler.DeleteTransaction),
-	))
+	router.Handle("POST /items", http.HandlerFunc(txHandler.CreateTransaction))
+	router.Handle("GET /items", http.HandlerFunc(txHandler.ListTransactions))
+	router.Handle("GET /items/{id}", http.HandlerFunc(txHandler.GetTransaction))
+	router.Handle("PUT /items/{id}", http.HandlerFunc(txHandler.UpdateTransaction))
+	router.Handle("DELETE /items/{id}", http.HandlerFunc(txHandler.DeleteTransaction))
 
 	analyticsHandler := handlers.Analytics()
-	router.Handle("GET /analytics", chain.Handle(
-		http.HandlerFunc(analyticsHandler.GetAnalytics),
-	))
+	router.Handle("GET /analytics", http.HandlerFunc(analyticsHandler.GetAnalytics))
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:      router,
+		Handler:      chain.Handle(router),
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
 	}

@@ -3,6 +3,7 @@ package implementation
 import (
 	"net/http"
 
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/service"
 )
 
@@ -23,6 +24,8 @@ func (h *analyticsHandler) GetAnalytics(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusBadRequest, "user_id, from and to are required")
 		return
 	}
+
+	observability.RecordAnalyticsRequest()
 
 	ctx := r.Context()
 	analytics, err := h.svc.GetAnalytics(ctx, userID, from, to)

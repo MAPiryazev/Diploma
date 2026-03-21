@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -48,14 +47,10 @@ func Logger(next http.Handler) http.Handler {
 			statusCode:     http.StatusOK,
 		}
 
-		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
-			requestID = fmt.Sprintf("%d", time.Now().UnixNano())
-		}
-
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start)
+		requestID := GetRequestID(r.Context())
 		entry := logEntry{
 			Method:     r.Method,
 			Path:       r.RequestURI,
@@ -67,12 +62,15 @@ func Logger(next http.Handler) http.Handler {
 			RequestID:  requestID,
 		}
 
-		statusStr := "OK"
-		if rw.statusCode >= 400 {
-			statusStr = "ERR"
-		}
-
-		log.Printf("[%s] %s %s %d %dms id=%s",
-			statusStr, entry.Method, entry.Path, entry.StatusCode, entry.DurationMs, entry.RequestID)
+		log.Printf(
+			"level=info method=%s path=%q status=%d duration_ms=%d client_ip=%q user_agent=%q request_id=%s",
+			entry.Method,
+			entry.Path,
+			entry.StatusCode,
+			entry.DurationMs,
+			entry.ClientIP,
+			entry.UserAgent,
+			entry.RequestID,
+		)
 	})
 }
