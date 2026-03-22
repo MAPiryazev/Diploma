@@ -452,6 +452,7 @@ Consumer публикует:
 - ошибки публикации в DLQ
 - retry handler
 - длительность обработки
+- лаг «время события в envelope (`event_time`) → успешная обработка» (`kafka_consumer_event_processing_lag_seconds`)
 
 ### Метрики Kafka lag
 `kafka-exporter` добавляет lag consumer group и offsets.
@@ -468,7 +469,7 @@ Consumer публикует:
 
 - datasource Prometheus
 - дашборд HTTP / бизнес-метрик
-- дашборд Kafka pipeline
+- дашборд Kafka pipeline (в т.ч. p50/p95 лага `event_time` → успешная обработка в consumer)
 
 ## Как тестировать сервис
 

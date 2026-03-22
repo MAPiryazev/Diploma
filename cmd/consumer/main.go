@@ -210,6 +210,7 @@ func handleMessage(
 		lastErr = processTransactionCreated(env)
 		if lastErr == nil {
 			observability.ObserveKafkaConsumerHandleDuration(time.Since(start))
+			observability.ObserveKafkaConsumerEventProcessingLag(env.EventTime)
 			observability.RecordKafkaConsumerProcessed()
 			commitMessage(ctx, reader, msg)
 			return

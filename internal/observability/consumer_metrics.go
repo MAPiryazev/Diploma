@@ -64,6 +64,17 @@ var (
 			Help: "Extra handler attempts after the first failure (step 6: backoff retry before DLQ).",
 		},
 	)
+
+	// Lag from envelope event_time to successful handler completion (processing time vs event time).
+	kafkaConsumerEventProcessingLag = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "kafka_consumer_event_processing_lag_seconds",
+			Help: "Seconds between envelope event_time and successful processing (clamped to >= 0; skipped if event_time is zero).",
+			Buckets: []float64{
+				0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300,
+			},
+		},
+	)
 )
 
 func RecordKafkaConsumerProcessed() {
@@ -96,4 +107,17 @@ func ObserveKafkaConsumerHandleDuration(d time.Duration) {
 
 func RecordKafkaConsumerHandlerRetry() {
 	kafkaConsumerHandlerRetries.Inc()
+}
+
+// ObserveKafkaConsumerEventProcessingLag records time.Since(eventTime) at successful processing.
+// Negative lag (clock skew) is clamped to zero. Zero eventTime is ignored.
+func ObserveKafkaConsumerEventProcessingLag(eventTime time.Time) {
+	if eventTime.IsZero() {
+		return
+	}
+	lag := time.Since(eventTime)
+	if lag < 0 {
+		lag = 0
+	}
+	kafkaConsumerEventProcessingLag.Observe(lag.Seconds())
 }
