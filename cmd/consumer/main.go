@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/db"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/security"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/kafka-go"
 	"github.com/wb-go/wbf/dbpg"
@@ -23,6 +26,7 @@ import (
 const (
 	handlerMaxAttempts = 3
 	handlerRetryBase   = 100 * time.Millisecond
+	largeAmountRule    = "large_amount"
 )
 
 func main() {
@@ -53,6 +57,7 @@ func main() {
 	// Миграции выполняет только API (cmd/server), иначе гонка с consumer → duplicate pg_type.
 
 	processedStore := events.NewPostgresProcessedEventsStore(database)
+	monitoringStore := events.NewPostgresMonitoringEventsStore(database)
 
 	dlqPublisher, err := events.NewDLQPublisher(cfg.Kafka.Brokers, cfg.Kafka.DLQTopic)
 	if err != nil {
@@ -97,7 +102,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runConsumeLoop(ctx, reader, processedStore, dlqPublisher)
+		errCh <- runConsumeLoop(ctx, reader, processedStore, monitoringStore, dlqPublisher, cfg.Monitoring.LargeAmountThreshold)
 	}()
 
 	sigChan := make(chan os.Signal, 1)
@@ -142,7 +147,9 @@ func runConsumeLoop(
 	ctx context.Context,
 	reader *kafka.Reader,
 	processedStore events.ProcessedEventsStore,
+	monitoringStore events.MonitoringEventsStore,
 	dlqPublisher *events.DLQPublisher,
+	largeAmountThreshold float64,
 ) error {
 	for {
 		msg, err := reader.FetchMessage(ctx)
@@ -153,7 +160,7 @@ func runConsumeLoop(
 			return fmt.Errorf("fetch message: %w", err)
 		}
 
-		handleMessage(ctx, reader, msg, processedStore, dlqPublisher)
+		handleMessage(ctx, reader, msg, processedStore, monitoringStore, dlqPublisher, largeAmountThreshold)
 	}
 }
 
@@ -162,7 +169,9 @@ func handleMessage(
 	reader *kafka.Reader,
 	msg kafka.Message,
 	processedStore events.ProcessedEventsStore,
+	monitoringStore events.MonitoringEventsStore,
 	dlqPublisher *events.DLQPublisher,
+	largeAmountThreshold float64,
 ) {
 	env, err := events.ParseTransactionCreatedJSON(msg.Value)
 	if err != nil {
@@ -176,7 +185,7 @@ func handleMessage(
 
 	isNew, err := processedStore.SaveIfNew(ctx, env.EventID, env.EventType)
 	if err != nil {
-		log.Printf("save processed event failed: event_id=%s partition=%d offset=%d err=%v", env.EventID, msg.Partition, msg.Offset, err)
+		log.Printf("save processed event failed: event_id=%s partition=%d offset=%d err=%v", security.MaskID(env.EventID), msg.Partition, msg.Offset, err)
 		publishDLQ(ctx, dlqPublisher, msg, env, "save_processed_event_failed")
 		commitMessage(ctx, reader, msg)
 		return
@@ -184,7 +193,7 @@ func handleMessage(
 
 	if !isNew {
 		observability.RecordKafkaConsumerDuplicate()
-		log.Printf("duplicate event skipped: event_id=%s partition=%d offset=%d", env.EventID, msg.Partition, msg.Offset)
+		log.Printf("duplicate event skipped: event_id=%s partition=%d offset=%d", security.MaskID(env.EventID), msg.Partition, msg.Offset)
 		commitMessage(ctx, reader, msg)
 		return
 	}
@@ -195,7 +204,7 @@ func handleMessage(
 	for attempt := 0; attempt < handlerMaxAttempts; attempt++ {
 		if attempt > 0 {
 			observability.RecordKafkaConsumerHandlerRetry()
-			log.Printf("handler retry attempt=%d event_id=%s partition=%d offset=%d", attempt+1, env.EventID, msg.Partition, msg.Offset)
+			log.Printf("handler retry attempt=%d event_id=%s partition=%d offset=%d", attempt+1, security.MaskID(env.EventID), msg.Partition, msg.Offset)
 			select {
 			case <-ctx.Done():
 				log.Printf("handler retry cancelled: %v", ctx.Err())
@@ -207,7 +216,7 @@ func handleMessage(
 			backoff *= 2
 		}
 
-		lastErr = processTransactionCreated(env)
+		lastErr = processTransactionCreated(ctx, env, monitoringStore, largeAmountThreshold)
 		if lastErr == nil {
 			observability.ObserveKafkaConsumerHandleDuration(time.Since(start))
 			observability.ObserveKafkaConsumerEventProcessingLag(env.EventTime)
@@ -216,7 +225,7 @@ func handleMessage(
 			return
 		}
 		log.Printf("process event failed (attempt %d/%d): event_id=%s partition=%d offset=%d err=%v",
-			attempt+1, handlerMaxAttempts, env.EventID, msg.Partition, msg.Offset, lastErr)
+			attempt+1, handlerMaxAttempts, security.MaskID(env.EventID), msg.Partition, msg.Offset, lastErr)
 	}
 
 	publishDLQ(ctx, dlqPublisher, msg, env, "handler_failed")
@@ -262,7 +271,12 @@ func publishDLQ(
 	observability.RecordKafkaConsumerDLQPublished()
 }
 
-func processTransactionCreated(env *events.TransactionCreatedEnvelope) error {
+func processTransactionCreated(
+	ctx context.Context,
+	env *events.TransactionCreatedEnvelope,
+	monitoringStore events.MonitoringEventsStore,
+	largeAmountThreshold float64,
+) error {
 	tx := env.Transaction
 	if tx == nil {
 		return errors.New("transaction payload is nil")
@@ -270,13 +284,47 @@ func processTransactionCreated(env *events.TransactionCreatedEnvelope) error {
 
 	log.Printf(
 		"transaction.created processed event_id=%s user_id=%s amount=%s currency=%s type=%s status=%s",
-		env.EventID,
-		tx.UserID,
-		tx.Amount,
+		security.MaskID(env.EventID),
+		security.MaskID(tx.UserID),
+		security.MaskAmount(tx.Amount),
 		tx.Currency,
 		tx.Type,
 		tx.Status,
 	)
+
+	if largeAmountThreshold > 0 {
+		amount, err := strconv.ParseFloat(strings.TrimSpace(tx.Amount), 64)
+		if err != nil {
+			return fmt.Errorf("parse transaction amount: %w", err)
+		}
+		if amount >= largeAmountThreshold {
+			observability.RecordMonitoringLargeAmountEvent()
+			log.Printf(
+				"monitoring rule matched rule=%s event_id=%s tx_id=%s user_id=%s threshold=%.2f",
+				largeAmountRule,
+				security.MaskID(env.EventID),
+				security.MaskID(tx.ID),
+				security.MaskID(tx.UserID),
+				largeAmountThreshold,
+			)
+			if monitoringStore != nil {
+				eventTime := env.EventTime
+				if eventTime.IsZero() {
+					eventTime = tx.OccurredAt
+				}
+				if err := monitoringStore.Save(ctx, events.MonitoringEvent{
+					TransactionID: tx.ID,
+					UserID:        tx.UserID,
+					RuleCode:      largeAmountRule,
+					Severity:      "warning",
+					Reason:        "transaction amount exceeded configured threshold",
+					EventTime:     eventTime,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	return nil
 }

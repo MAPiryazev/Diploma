@@ -41,13 +41,13 @@ type createTxBody struct {
 	Amount        string  `json:"amount"`
 	Currency      string  `json:"currency"`
 	FromAccountID *string `json:"from_account_id"`
-	ToAccountID   *string  `json:"to_account_id"`
-	ProviderID    *string  `json:"provider_id"`
-	CategoryID    *string  `json:"category_id"`
+	ToAccountID   *string `json:"to_account_id"`
+	ProviderID    *string `json:"provider_id"`
+	CategoryID    *string `json:"category_id"`
 	Type          string  `json:"type"`
 	Status        string  `json:"status"`
-	Description   *string  `json:"description"`
-	ExternalID    *string  `json:"external_id"`
+	Description   *string `json:"description"`
+	ExternalID    *string `json:"external_id"`
 	OccurredAt    string  `json:"occurred_at"`
 }
 
@@ -74,6 +74,7 @@ func main() {
 	burstOn := flag.Duration("burst-on", 30*time.Second, "всплеск QPS в pattern=burst")
 	workers := flag.Int("workers", 4, "число параллельных воркеров")
 	timeout := flag.Duration("timeout", 15*time.Second, "таймаут одного HTTP-запроса")
+	authToken := flag.String("auth-token", envOrDefault("LOAD_AUTH_TOKEN", "dev-token"), "Bearer token for protected API routes")
 	skipHealth := flag.Bool("skip-health", false, "не вызывать GET /health перед нагрузкой")
 	logEvery := flag.Duration("log-every", 15*time.Second, "как часто печатать текущий целевой QPS (0 = отключить)")
 	flag.Parse()
@@ -169,7 +170,7 @@ func main() {
 				sleep := workerSleep(*workers, q)
 
 				reqCtx, cancel := context.WithTimeout(context.Background(), *timeout)
-				err := postTransaction(reqCtx, client, *baseURL, rnd, &okCount, &errCount)
+				err := postTransaction(reqCtx, client, *baseURL, *authToken, rnd, &okCount, &errCount)
 				cancel()
 				if err != nil {
 					log.Printf("worker %d: %v", workerID, err)
@@ -317,7 +318,7 @@ func pingHealth(ctx context.Context, client *http.Client, base string) error {
 	return nil
 }
 
-func postTransaction(ctx context.Context, client *http.Client, base string, rnd *rand.Rand, okCount, errCount *int64) error {
+func postTransaction(ctx context.Context, client *http.Client, base string, authToken string, rnd *rand.Rand, okCount, errCount *int64) error {
 	from := defaultFromAccountID
 	cat := defaultCategoryID
 	prov := defaultProviderID
@@ -351,6 +352,9 @@ func postTransaction(ctx context.Context, client *http.Client, base string, rnd 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(authToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -367,4 +371,11 @@ func postTransaction(ctx context.Context, client *http.Client, base string, rnd 
 
 	atomic.AddInt64(errCount, 1)
 	return fmt.Errorf("POST /items: %s body=%s", resp.Status, string(slurp))
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }

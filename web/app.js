@@ -1,4 +1,5 @@
 const API_BASE = window.location.origin;
+const AUTH_TOKEN = localStorage.getItem("authToken") || "dev-token";
 
 document.addEventListener("DOMContentLoaded", () => {
   checkHealth();
@@ -322,6 +323,12 @@ function escapeHtml(s) {
 }
 
 async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (AUTH_TOKEN) {
+    headers.set("Authorization", `Bearer ${AUTH_TOKEN}`);
+  }
+  options.headers = headers;
+
   let response;
   try {
     response = await fetch(url, options);

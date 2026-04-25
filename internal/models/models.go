@@ -50,3 +50,15 @@ type Transaction struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 	DeletedAt     *time.Time `json:"deleted_at"`
 }
+
+type AuditLog struct {
+	ID         string    `json:"id"`
+	ActorID    string    `json:"actor_id"`
+	ActorRole  string    `json:"actor_role"`
+	Action     string    `json:"action"`
+	EntityType string    `json:"entity_type"`
+	EntityID   *string   `json:"entity_id"`
+	Result     string    `json:"result"`
+	RequestID  string    `json:"request_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}

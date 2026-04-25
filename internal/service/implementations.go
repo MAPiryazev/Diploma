@@ -287,6 +287,12 @@ func (s *transactionServiceImpl) CreateTransaction(ctx context.Context, req *Cre
 	if err := validator.ValidateTransactionAccounts(req.Type, fromID, toID); err != nil {
 		return nil, err
 	}
+	if err := s.validateAccountOwnership(ctx, req.UserID, fromID, "from_account_id"); err != nil {
+		return nil, err
+	}
+	if err := s.validateAccountOwnership(ctx, req.UserID, toID, "to_account_id"); err != nil {
+		return nil, err
+	}
 
 	if req.CategoryID != nil {
 		if err := validator.ValidateUUID(*req.CategoryID); err != nil {
@@ -396,6 +402,12 @@ func (s *transactionServiceImpl) UpdateTransaction(ctx context.Context, req *Upd
 	if err := validator.ValidateTransactionAccounts(req.Type, fromID, toID); err != nil {
 		return err
 	}
+	if err := s.validateAccountOwnership(ctx, req.UserID, fromID, "from_account_id"); err != nil {
+		return err
+	}
+	if err := s.validateAccountOwnership(ctx, req.UserID, toID, "to_account_id"); err != nil {
+		return err
+	}
 
 	occurredAt, _ := time.Parse(time.RFC3339, req.OccurredAt)
 
@@ -441,6 +453,22 @@ func (s *transactionServiceImpl) DeleteTransaction(ctx context.Context, txID, us
 		return fmt.Errorf("failed to delete transaction: %w", err)
 	}
 
+	return nil
+}
+
+func (s *transactionServiceImpl) validateAccountOwnership(ctx context.Context, userID, accountID, field string) error {
+	if accountID == "" {
+		return nil
+	}
+	if err := validator.ValidateUUID(accountID); err != nil {
+		return &apperrors.ValidationError{Field: field, Message: "invalid UUID"}
+	}
+	if _, err := s.accRepo.GetByID(ctx, accountID, userID); err != nil {
+		if errors.Is(err, apperrors.ErrNotFound) {
+			return &apperrors.ValidationError{Field: field, Message: "account not found"}
+		}
+		return err
+	}
 	return nil
 }
 

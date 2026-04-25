@@ -54,6 +54,7 @@ func main() {
 		Transaction: repository.NewTransactionRepository(database),
 		Analytics:   repository.NewAnalyticsRepository(database),
 		Idempotency: repository.NewIdempotencyRepository(database),
+		Audit:       repository.NewAuditRepository(database),
 	}
 
 	services := service.NewServices(repos)
@@ -84,15 +85,16 @@ func main() {
 	router.Handle("GET /health", http.HandlerFunc(handlers.Health().Health))
 	router.Handle("GET /ready", http.HandlerFunc(handlers.Health().Ready))
 
+	auth := middleware.BearerAuth(cfg.Security.AuthTokens)
 	txHandler := handlers.Transaction()
-	router.Handle("POST /items", http.HandlerFunc(txHandler.CreateTransaction))
-	router.Handle("GET /items", http.HandlerFunc(txHandler.ListTransactions))
-	router.Handle("GET /items/{id}", http.HandlerFunc(txHandler.GetTransaction))
-	router.Handle("PUT /items/{id}", http.HandlerFunc(txHandler.UpdateTransaction))
-	router.Handle("DELETE /items/{id}", http.HandlerFunc(txHandler.DeleteTransaction))
+	router.Handle("POST /items", auth(http.HandlerFunc(txHandler.CreateTransaction)))
+	router.Handle("GET /items", auth(http.HandlerFunc(txHandler.ListTransactions)))
+	router.Handle("GET /items/{id}", auth(http.HandlerFunc(txHandler.GetTransaction)))
+	router.Handle("PUT /items/{id}", auth(http.HandlerFunc(txHandler.UpdateTransaction)))
+	router.Handle("DELETE /items/{id}", auth(http.HandlerFunc(txHandler.DeleteTransaction)))
 
 	analyticsHandler := handlers.Analytics()
-	router.Handle("GET /analytics", http.HandlerFunc(analyticsHandler.GetAnalytics))
+	router.Handle("GET /analytics", auth(http.HandlerFunc(analyticsHandler.GetAnalytics)))
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

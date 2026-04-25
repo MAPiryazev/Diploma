@@ -9,9 +9,14 @@ import (
 	apperrors "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/errors"
 )
 
+var (
+	emailPattern    = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
+	uuidPattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
+
 func ValidateEmail(email string) error {
-	const emailPattern = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
-	if !regexp.MustCompile(emailPattern).MatchString(email) {
+	if !emailPattern.MatchString(email) {
 		return &apperrors.ValidationError{Field: "email", Message: "invalid format"}
 	}
 	return nil
@@ -102,7 +107,7 @@ func ValidateCurrency(currency string) error {
 	if len(currency) != 3 {
 		return &apperrors.ValidationError{Field: "currency", Message: "must be 3-char code"}
 	}
-	if !regexp.MustCompile(`^[A-Z]{3}$`).MatchString(currency) {
+	if !currencyPattern.MatchString(currency) {
 		return &apperrors.ValidationError{Field: "currency", Message: "must contain only letters"}
 	}
 	return nil
@@ -156,8 +161,7 @@ func ValidateUUID(id string) error {
 		return &apperrors.ValidationError{Field: "id", Message: "required"}
 	}
 
-	const uuidPattern = `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
-	if !regexp.MustCompile(uuidPattern).MatchString(id) {
+	if !uuidPattern.MatchString(id) {
 		return &apperrors.ValidationError{Field: "id", Message: "invalid UUID format"}
 	}
 	return nil

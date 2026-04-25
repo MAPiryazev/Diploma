@@ -68,7 +68,7 @@ func (h *handlersImpl) Health() handlers.HealthHandler {
 
 func NewHandlers(svcs *service.Services, repos *repository.Repositories, database *dbpg.DB, publisher events.Publisher) handlers.Handlers {
 	return &handlersImpl{
-		transaction: newTransactionHandler(svcs.Transaction, repos.Idempotency, publisher),
+		transaction: newTransactionHandler(svcs.Transaction, repos.Idempotency, repos.Audit, publisher),
 		analytics:   newAnalyticsHandler(svcs.Analytics),
 		health:      newHealthHandler(database),
 	}

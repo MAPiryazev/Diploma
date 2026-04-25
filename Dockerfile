@@ -18,6 +18,7 @@ WORKDIR /app/cmd/server
 
 COPY --from=build /out/server ./server
 COPY --from=build /out/consumer /app/cmd/consumer/consumer
+COPY config.yaml /app/config.yaml
 COPY environment /app/environment
 COPY migrations /app/migrations
 COPY web /app/web

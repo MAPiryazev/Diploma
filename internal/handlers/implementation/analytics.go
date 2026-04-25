@@ -16,12 +16,18 @@ func newAnalyticsHandler(svc service.AnalyticsService) *analyticsHandler {
 }
 
 func (h *analyticsHandler) GetAnalytics(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
+	userID, ok := authenticatedUserID(w, r)
+	if !ok {
+		return
+	}
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 
-	if userID == "" || from == "" || to == "" {
-		respondError(w, http.StatusBadRequest, "user_id, from and to are required")
+	if !queryUserMatchesPrincipal(w, r, userID) {
+		return
+	}
+	if from == "" || to == "" {
+		respondError(w, http.StatusBadRequest, "from and to are required")
 		return
 	}
 
@@ -34,8 +40,5 @@ func (h *analyticsHandler) GetAnalytics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "success",
-		"data":   analytics,
-	})
+	respondSuccess(w, http.StatusOK, analytics)
 }

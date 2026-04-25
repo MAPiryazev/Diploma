@@ -13,6 +13,7 @@ LOAD_DURATION ?= 30m
 LOAD_PATTERN ?= mixed
 LOAD_QPS ?= 6
 LOAD_WORKERS ?= 4
+LOAD_AUTH_TOKEN ?= dev-token
 
 .PHONY: run run-consumer dlq-replay load docker-up docker-stop docker-down-v help
 
@@ -41,7 +42,7 @@ dlq-replay:
 	cd cmd/dlqreplay && go run . $(ARGS)
 
 load:
-	cd cmd/load && go run . -url "$(LOAD_URL)" -duration "$(LOAD_DURATION)" -pattern "$(LOAD_PATTERN)" -qps "$(LOAD_QPS)" -workers "$(LOAD_WORKERS)" $(LOAD_ARGS)
+	cd cmd/load && go run . -url "$(LOAD_URL)" -duration "$(LOAD_DURATION)" -pattern "$(LOAD_PATTERN)" -qps "$(LOAD_QPS)" -workers "$(LOAD_WORKERS)" -auth-token "$(LOAD_AUTH_TOKEN)" $(LOAD_ARGS)
 
 docker-up:
 	docker compose up -d --build

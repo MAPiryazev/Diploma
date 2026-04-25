@@ -57,13 +57,18 @@ type IdempotencyRepository interface {
 	Save(ctx context.Context, userID, idempotencyKey string, bodyHash []byte, httpStatus int, responseJSON []byte) error
 }
 
+type AuditRepository interface {
+	Create(ctx context.Context, log *models.AuditLog) error
+}
+
 // Структура для инъекции зависимостей в сервисный слой
 type Repositories struct {
-	User         UserRepository
-	Account      AccountRepository
-	Category     CategoryRepository
-	Provider     ProviderRepository
-	Transaction  TransactionRepository
-	Analytics    AnalyticsRepository
-	Idempotency  IdempotencyRepository
+	User        UserRepository
+	Account     AccountRepository
+	Category    CategoryRepository
+	Provider    ProviderRepository
+	Transaction TransactionRepository
+	Analytics   AnalyticsRepository
+	Idempotency IdempotencyRepository
+	Audit       AuditRepository
 }

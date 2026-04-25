@@ -21,6 +21,13 @@ func respondError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
+func respondSuccess(w http.ResponseWriter, status int, data interface{}) {
+	respondJSON(w, status, map[string]interface{}{
+		"status": "success",
+		"data":   data,
+	})
+}
+
 func handleServiceError(w http.ResponseWriter, err error) {
 	var valErr *apperrors.ValidationError
 	if errors.As(err, &valErr) {

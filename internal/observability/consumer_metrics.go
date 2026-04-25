@@ -75,6 +75,13 @@ var (
 			},
 		},
 	)
+
+	monitoringLargeAmountEvents = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "monitoring_large_amount_events_total",
+			Help: "Transaction events that exceeded the configured large amount monitoring threshold.",
+		},
+	)
 )
 
 func RecordKafkaConsumerProcessed() {
@@ -120,4 +127,8 @@ func ObserveKafkaConsumerEventProcessingLag(eventTime time.Time) {
 		lag = 0
 	}
 	kafkaConsumerEventProcessingLag.Observe(lag.Seconds())
+}
+
+func RecordMonitoringLargeAmountEvent() {
+	monitoringLargeAmountEvents.Inc()
 }

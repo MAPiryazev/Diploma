@@ -9,6 +9,9 @@
 - Web UI из каталога `web/`.
 - Аналитику по транзакциям за период.
 - Идемпотентность для `POST /items` через заголовок `Idempotency-Key`.
+- Bearer-token аутентификацию пользовательских маршрутов.
+- Audit log для операций создания, изменения и удаления транзакций.
+- Простое правило мониторинга крупных операций.
 - Kafka producer на стороне API.
 - Kafka consumer с дедупликацией, retry, DLQ и replay.
 - Метрики Prometheus и дашборды Grafana.
@@ -32,8 +35,9 @@
 2. API валидирует и записывает транзакцию в PostgreSQL.
 3. После успешной записи API публикует событие `transaction.created` в Kafka.
 4. Consumer читает событие, валидирует envelope, проверяет дедупликацию и фиксирует обработку.
-5. При ошибках сообщение может попасть в DLQ.
-6. Метрики producer, consumer и lag доступны в Prometheus и Grafana.
+5. Если транзакция превышает настроенный порог, consumer сохраняет событие мониторинга.
+6. При ошибках сообщение может попасть в DLQ.
+7. Метрики producer, consumer и lag доступны в Prometheus и Grafana.
 
 ## Структура проекта
 
@@ -68,6 +72,23 @@
 - `DELETE /items/{id}` — мягкое удаление транзакции.
 - `GET /analytics` — аналитика за период.
 
+Пользовательские маршруты требуют заголовок:
+
+```http
+Authorization: Bearer dev-token
+```
+
+В demo-конфигурации `dev-token` привязан к пользователю `11111111-1111-1111-1111-111111111111`. Если клиент передаст другой `user_id` в body или query, API вернет `403 Forbidden`.
+
+### Безопасность и аудит
+В учебном контуре реализованы базовые меры защиты:
+
+- Bearer-token аутентификация пользовательских маршрутов.
+- Проверка, что `from_account_id` и `to_account_id` принадлежат текущему пользователю.
+- Audit log для `create`, `update`, `delete` транзакций в таблице `audit_logs`.
+- Маскирование чувствительных идентификаторов в consumer-логах.
+- Настраиваемый `POSTGRES_SSLMODE` для подключения к PostgreSQL.
+
 ### Идемпотентность `POST /items`
 Если клиент передает заголовок `Idempotency-Key`, сервис:
 
@@ -87,6 +108,7 @@ Kafka в проекте используется как событийная ш�
 - Consumer читает события из topic `transactions.events`.
 - Consumer валидирует JSON-envelope.
 - Дедупликация идет по `event_id` через таблицу `processed_events`.
+- Крупные операции фиксируются как monitoring events в таблице `monitoring_events`.
 - Для ошибок обработки используется topic `transactions.events.dlq`.
 - Есть утилита replay из DLQ в основной topic.
 - Добавлены retry перед отправкой в DLQ.
@@ -183,7 +205,14 @@ curl "http://localhost:8081/analytics?user_id=11111111-1111-1111-1111-1111111111
 Именно эти значения использует утилита нагрузки `cmd/load`.
 
 ## Конфигурация
-Конфигурация загружается из `environment/.env` и может быть переопределена через переменные окружения.
+Базовая несекретная конфигурация хранится в `config.yaml`. Локальные секреты и переопределения задаются через `.env` / `environment/.env`, а шаблоны лежат в `.env.example`, `environment/.env.example` и `config.example.yaml`.
+
+Приоритет значений:
+
+1. значения по умолчанию в коде;
+2. `config.yaml`;
+3. `.env` / `environment/.env`;
+4. реальные переменные окружения процесса или Docker Compose.
 
 Ключевые параметры:
 
@@ -192,6 +221,7 @@ curl "http://localhost:8081/analytics?user_id=11111111-1111-1111-1111-1111111111
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
 - `POSTGRES_NAME`
+- `POSTGRES_SSLMODE`
 - `SERVER_PORT`
 - `SERVER_READ_TIMEOUT`
 - `SERVER_WRITE_TIMEOUT`
@@ -202,6 +232,8 @@ curl "http://localhost:8081/analytics?user_id=11111111-1111-1111-1111-1111111111
 - `KAFKA_DLQ_TOPIC`
 - `KAFKA_CONSUMER_GROUP_ID`
 - `CONSUMER_METRICS_PORT`
+- `SECURITY_AUTH_TOKENS`
+- `MONITORING_LARGE_AMOUNT_THRESHOLD`
 - `APP_HTTP_PORT`
 - `PROMETHEUS_PORT`
 - `GRAFANA_PORT`
@@ -218,6 +250,8 @@ curl "http://localhost:8081/analytics?user_id=11111111-1111-1111-1111-1111111111
 - `002_init_data.sql` — сиды.
 - `003_idempotency.sql` — таблица идемпотентности.
 - `004_consumer_step4.sql` — таблица `processed_events`.
+- `005_audit_logs.sql` — таблица аудита действий с транзакциями.
+- `006_monitoring_events.sql` — события мониторинга по правилам.
 
 Важно:
 
@@ -311,6 +345,7 @@ curl -s http://localhost:8081/ready
 ```bash
 curl -X POST http://localhost:8081/items \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-token" \
   -d '{
     "user_id": "11111111-1111-1111-1111-111111111111",
     "amount": "199.99",
@@ -331,6 +366,7 @@ curl -X POST http://localhost:8081/items \
 ```bash
 curl -X POST http://localhost:8081/items \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-token" \
   -H "Idempotency-Key: my-test-key-1" \
   -d '{
     "user_id": "11111111-1111-1111-1111-111111111111",
@@ -379,6 +415,7 @@ make load LOAD_DURATION=60s LOAD_QPS=10 LOAD_WORKERS=6
 
 - проверяет `GET /health`;
 - шлет валидные `POST /items` на API;
+- передает demo-токен `Authorization: Bearer dev-token` по умолчанию;
 - использует сиды из `002_init_data.sql`;
 - генерирует уникальные `external_id`;
 - печатает итог `ok` / `errors`.
@@ -557,8 +594,8 @@ make docker-up
 ## Безопасность и ограничения текущей реализации
 
 - Проект учебный, поэтому admin credentials Grafana заданы явно (`admin/admin`).
-- Нет полноценной аутентификации пользователей.
-- Consumer пока не выполняет сложную доменную обработку, а служит каркасом для событийного пайплайна.
+- Аутентификация реализована demo-уровнем через статические Bearer-токены; полноценный JWT/OAuth/RBAC остается направлением развития.
+- Consumer реализует базовое правило мониторинга крупных операций; сложный rule engine пока не реализован.
 - Replay не удаляет автоматически записи из `processed_events`.
 - DLQ и retry реализованы в минимально полезном виде для учебного сценария.
 
@@ -570,7 +607,8 @@ make docker-up
 4. Дедупликация, DLQ, ручной commit.
 5. Метрики, Prometheus, Grafana, lag через kafka-exporter.
 6. Retry и replay.
-7. Основа для демонстрации и описания в дипломе.
+7. Audit log, Bearer-token auth и правило мониторинга крупных операций.
+8. Основа для демонстрации и описания в дипломе.
 
 ## Что можно развивать дальше
 
