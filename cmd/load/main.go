@@ -191,7 +191,7 @@ func main() {
 	qps := flag.Float64("qps", 8, "target total requests per second")
 	workers := flag.Int("workers", 6, "parallel workers")
 	timeout := flag.Duration("timeout", 15*time.Second, "single request timeout")
-	authToken := flag.String("auth-token", envOrDefault("LOAD_AUTH_TOKEN", "dev-token"), "Bearer token for protected routes")
+	authToken := flag.String("auth-token", envOrDefault("LOAD_AUTH_TOKEN", ""), "Bearer JWT for protected routes")
 	skipHealth := flag.Bool("skip-health", false, "skip GET /health before the run")
 	logEvery := flag.Duration("log-every", 15*time.Second, "progress log interval, 0 disables logs")
 	flag.Parse()

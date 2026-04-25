@@ -85,7 +85,7 @@ func main() {
 	router.Handle("GET /health", http.HandlerFunc(handlers.Health().Health))
 	router.Handle("GET /ready", http.HandlerFunc(handlers.Health().Ready))
 
-	auth := middleware.BearerAuth(cfg.Security.AuthTokens)
+	auth := middleware.JWTAuth(cfg.Security.JWTSecret, cfg.Security.AuthTokens)
 	txHandler := handlers.Transaction()
 	router.Handle("POST /items", auth(http.HandlerFunc(txHandler.CreateTransaction)))
 	router.Handle("GET /items", auth(http.HandlerFunc(txHandler.ListTransactions)))

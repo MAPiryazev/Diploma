@@ -26,6 +26,9 @@ consumer:
   metrics_port: 2112
 
 security:
+  jwt_secret: replace-with-long-random-jwt-secret
+  jwt_ttl: 1h
+  # Optional legacy fallback for local/dev migration only.
   auth_tokens:
     - token: replace-with-long-random-token
       user_id: 11111111-1111-1111-1111-111111111111

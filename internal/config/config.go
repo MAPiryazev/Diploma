@@ -53,6 +53,8 @@ type Consumer struct {
 }
 
 type Security struct {
+	JWTSecret  string      `yaml:"jwt_secret"`
+	JWTTTL     string      `yaml:"jwt_ttl"`
 	AuthTokens []AuthToken `yaml:"auth_tokens"`
 }
 
@@ -116,6 +118,8 @@ func defaultConfig() *Config {
 			MetricsPort: 2112,
 		},
 		Security: Security{
+			JWTSecret: "dev-jwt-secret-change-me",
+			JWTTTL:    "1h",
 			AuthTokens: []AuthToken{{
 				Token:  "dev-token",
 				UserID: "11111111-1111-1111-1111-111111111111",
@@ -194,6 +198,8 @@ func applyEnv(cfg *Config) {
 
 	cfg.Consumer.MetricsPort = envInt("CONSUMER_METRICS_PORT", cfg.Consumer.MetricsPort)
 
+	cfg.Security.JWTSecret = envString("SECURITY_JWT_SECRET", cfg.Security.JWTSecret)
+	cfg.Security.JWTTTL = envString("SECURITY_JWT_TTL", cfg.Security.JWTTTL)
 	if raw := strings.TrimSpace(os.Getenv("SECURITY_AUTH_TOKENS")); raw != "" {
 		cfg.Security.AuthTokens = parseAuthTokens(raw)
 	}

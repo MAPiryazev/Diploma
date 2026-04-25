@@ -1,5 +1,5 @@
 const API_BASE = window.location.origin;
-const AUTH_TOKEN = localStorage.getItem("authToken") || "dev-token";
+const AUTH_TOKEN = localStorage.getItem("authToken") || "";
 
 document.addEventListener("DOMContentLoaded", () => {
   checkHealth();

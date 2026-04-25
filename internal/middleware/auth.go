@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/authjwt"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/config"
 )
 
@@ -19,8 +21,12 @@ type Principal struct {
 const principalContextKey contextKey = "principal"
 
 func BearerAuth(tokens []config.AuthToken) func(http.Handler) http.Handler {
-	byToken := make(map[string]Principal, len(tokens))
-	for _, token := range tokens {
+	return JWTAuth("", tokens)
+}
+
+func JWTAuth(secret string, legacyTokens []config.AuthToken) func(http.Handler) http.Handler {
+	byToken := make(map[string]Principal, len(legacyTokens))
+	for _, token := range legacyTokens {
 		if strings.TrimSpace(token.Token) == "" || strings.TrimSpace(token.UserID) == "" {
 			continue
 		}
@@ -34,6 +40,7 @@ func BearerAuth(tokens []config.AuthToken) func(http.Handler) http.Handler {
 			Token:  token.Token,
 		}
 	}
+	secret = strings.TrimSpace(secret)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +56,21 @@ func BearerAuth(tokens []config.AuthToken) func(http.Handler) http.Handler {
 				return
 			}
 
-			principal, ok := byToken[strings.TrimSpace(token)]
+			token = strings.TrimSpace(token)
+			if secret != "" {
+				claims, err := authjwt.Parse(secret, token, time.Now())
+				if err == nil {
+					ctx := context.WithValue(r.Context(), principalContextKey, Principal{
+						UserID: claims.UserID,
+						Role:   claims.Role,
+						Token:  token,
+					})
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			principal, ok := byToken[token]
 			if !ok {
 				writeAuthError(w, http.StatusUnauthorized, "invalid bearer token")
 				return
