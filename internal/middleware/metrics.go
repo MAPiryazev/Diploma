@@ -21,12 +21,17 @@ func Metrics(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rw, r)
 
+		duration := time.Since(start)
+		route := normalizeRouteLabel(r.URL.Path)
 		observability.ObserveHTTPRequest(
 			r.Method,
-			normalizeRouteLabel(r.URL.Path),
+			route,
 			rw.statusCode,
-			time.Since(start),
+			duration,
 		)
+		if usecase := useCaseLabel(r.Method, route); usecase != "" {
+			observability.ObserveAPIUseCase(usecase, resultLabel(rw.statusCode), duration)
+		}
 	})
 }
 
@@ -49,4 +54,30 @@ func normalizeRouteLabel(path string) string {
 	default:
 		return "/static"
 	}
+}
+
+func useCaseLabel(method, route string) string {
+	switch method + " " + route {
+	case "POST /items":
+		return "transaction.create"
+	case "GET /items":
+		return "transaction.list"
+	case "GET /items/{id}":
+		return "transaction.get"
+	case "PUT /items/{id}":
+		return "transaction.update"
+	case "DELETE /items/{id}":
+		return "transaction.delete"
+	case "GET /analytics":
+		return "analytics.get"
+	default:
+		return ""
+	}
+}
+
+func resultLabel(status int) string {
+	if status >= 200 && status < 400 {
+		return "success"
+	}
+	return "error"
 }

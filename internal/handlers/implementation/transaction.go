@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	apperrors "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/errors"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
@@ -85,6 +86,7 @@ func (h *transactionHandler) createTransactionIdempotent(
 	req *service.CreateTransactionRequest,
 	idemKey string,
 ) {
+	start := time.Now()
 	ctx := r.Context()
 	sum := sha256.Sum256(body)
 
@@ -98,9 +100,11 @@ func (h *transactionHandler) createTransactionIdempotent(
 	}
 	if rec != nil {
 		if !bytes.Equal(sum[:], rec.BodyHash) {
+			observability.ObserveAPIUseCase("idempotency.conflict", "error", time.Since(start))
 			respondError(w, http.StatusConflict, "idempotency key conflict: request body differs from the first request")
 			return
 		}
+		observability.ObserveAPIUseCase("idempotency.replay", "success", time.Since(start))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(rec.HTTPStatus)
 		_, _ = w.Write(rec.ResponseJSON)

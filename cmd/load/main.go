@@ -1,11 +1,9 @@
-// Генератор нагрузки на API (демо Prometheus / Grafana): POST /items с валидными UUID из сидов.
-// Поддерживает несколько паттернов QPS во времени и не рвёт последние запросы из‑за deadline всего прогона.
+// Scenario load runner for the protected API.
 //
-// Примеры:
+// Examples:
 //
-//	go run ./cmd/load -pattern steady -duration 2m -qps 8
-//	go run ./cmd/load -pattern mixed -duration 30m -workers 6
-//	go run ./cmd/load -pattern wave -qps-min 2 -qps-max 18 -wave-period 3m
+//	go run ./cmd/load -duration 2m -qps 8 -profile balanced
+//	go run ./cmd/load -profile negative -duration 30s
 package main
 
 import (
@@ -16,27 +14,28 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// UUID из migrations/002_init_data.sql (Michael + счёт + категория + провайдер).
 const (
 	defaultUserID        = "11111111-1111-1111-1111-111111111111"
 	defaultFromAccountID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	defaultCategoryID    = "44444444-4444-4444-4444-444444444444"
 	defaultProviderID    = "77777777-7777-7777-7777-777777777777"
+	wrongUserID          = "22222222-2222-2222-2222-222222222222"
 )
 
 var extSeq int64
 
-type createTxBody struct {
+type txBody struct {
 	UserID        string  `json:"user_id"`
 	Amount        string  `json:"amount"`
 	Currency      string  `json:"currency"`
@@ -47,36 +46,154 @@ type createTxBody struct {
 	Type          string  `json:"type"`
 	Status        string  `json:"status"`
 	Description   *string `json:"description"`
-	ExternalID    *string `json:"external_id"`
+	ExternalID    *string `json:"external_id,omitempty"`
 	OccurredAt    string  `json:"occurred_at"`
 }
 
-type patternKind string
+type transaction struct {
+	ID string `json:"id"`
+}
 
-const (
-	patternSteady patternKind = "steady"
-	patternWave   patternKind = "wave"
-	patternSteps  patternKind = "steps"
-	patternBurst  patternKind = "burst"
-	patternMixed  patternKind = "mixed"
-)
+type apiResponse[T any] struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Data    T      `json:"data"`
+	Count   int    `json:"count"`
+}
+
+type scenario struct {
+	name   string
+	weight int
+	run    func(context.Context, *runner, *rand.Rand) result
+}
+
+type result struct {
+	scenario string
+	expected int
+	actual   int
+	duration time.Duration
+	err      error
+}
+
+type runner struct {
+	baseURL   string
+	authToken string
+	client    *http.Client
+	pool      txPool
+	stats     stats
+}
+
+type txPool struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func (p *txPool) add(id string) {
+	if id == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ids = append(p.ids, id)
+}
+
+func (p *txPool) pick(rnd *rand.Rand) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.ids) == 0 {
+		return "", false
+	}
+	return p.ids[rnd.Intn(len(p.ids))], true
+}
+
+func (p *txPool) pop(rnd *rand.Rand) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.ids) == 0 {
+		return "", false
+	}
+	i := rnd.Intn(len(p.ids))
+	id := p.ids[i]
+	p.ids[i] = p.ids[len(p.ids)-1]
+	p.ids = p.ids[:len(p.ids)-1]
+	return id, true
+}
+
+type stats struct {
+	mu      sync.Mutex
+	rows    map[string]*statRow
+	started time.Time
+}
+
+type statRow struct {
+	ok        int
+	bad       int
+	statuses  map[string]int
+	durations []time.Duration
+}
+
+func (s *stats) init() {
+	s.started = time.Now()
+	s.rows = make(map[string]*statRow)
+}
+
+func (s *stats) record(res result) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row := s.rows[res.scenario]
+	if row == nil {
+		row = &statRow{statuses: make(map[string]int)}
+		s.rows[res.scenario] = row
+	}
+	if res.err == nil && res.actual == res.expected {
+		row.ok++
+	} else {
+		row.bad++
+	}
+	status := fmt.Sprintf("%d", res.actual)
+	if res.err != nil {
+		status = "error"
+	}
+	row.statuses[status]++
+	if res.duration > 0 {
+		row.durations = append(row.durations, res.duration)
+	}
+}
+
+func (s *stats) print(profile string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	names := make([]string, 0, len(s.rows))
+	for name := range s.rows {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var totalOK, totalBad int
+	fmt.Printf("\nload finished: profile=%s elapsed=%s\n", profile, time.Since(s.started).Round(time.Second))
+	fmt.Println("scenario             ok    errors  p50     p95     p99     statuses")
+	for _, name := range names {
+		row := s.rows[name]
+		totalOK += row.ok
+		totalBad += row.bad
+		p50, p95, p99 := quantiles(row.durations)
+		fmt.Printf("%-20s %5d %7d  %-7s %-7s %-7s %s\n",
+			name, row.ok, row.bad, p50, p95, p99, formatStatuses(row.statuses))
+	}
+	fmt.Printf("total: ok=%d errors=%d\n", totalOK, totalBad)
+}
 
 func main() {
-	baseURL := flag.String("url", "http://localhost:8081", "base URL API (без завершающего /)")
-	duration := flag.Duration("duration", 30*time.Minute, "длительность прогона")
-	pattern := flag.String("pattern", string(patternMixed), "steady | wave | steps | burst | mixed")
-	qps := flag.Float64("qps", 6, "целевой QPS для steady (и «база» для подсказок в логах)")
-	qpsMin := flag.Float64("qps-min", 2, "нижняя граница QPS (wave/steps/burst/mixed)")
-	qpsMax := flag.Float64("qps-max", 18, "верхняя граница QPS")
-	wavePeriod := flag.Duration("wave-period", 4*time.Minute, "период синусоиды для pattern=wave")
-	stepInterval := flag.Duration("step-interval", 90*time.Second, "длительность ступени low/high для pattern=steps")
-	burstOff := flag.Duration("burst-off", 4*time.Minute+30*time.Second, "низкий QPS в pattern=burst")
-	burstOn := flag.Duration("burst-on", 30*time.Second, "всплеск QPS в pattern=burst")
-	workers := flag.Int("workers", 4, "число параллельных воркеров")
-	timeout := flag.Duration("timeout", 15*time.Second, "таймаут одного HTTP-запроса")
-	authToken := flag.String("auth-token", envOrDefault("LOAD_AUTH_TOKEN", "dev-token"), "Bearer token for protected API routes")
-	skipHealth := flag.Bool("skip-health", false, "не вызывать GET /health перед нагрузкой")
-	logEvery := flag.Duration("log-every", 15*time.Second, "как часто печатать текущий целевой QPS (0 = отключить)")
+	baseURL := flag.String("url", "http://localhost:8081", "base API URL without trailing slash")
+	duration := flag.Duration("duration", 30*time.Minute, "load duration")
+	profile := flag.String("profile", envOrDefault("LOAD_PROFILE", "balanced"), "smoke | balanced | stress | negative")
+	qps := flag.Float64("qps", 8, "target total requests per second")
+	workers := flag.Int("workers", 6, "parallel workers")
+	timeout := flag.Duration("timeout", 15*time.Second, "single request timeout")
+	authToken := flag.String("auth-token", envOrDefault("LOAD_AUTH_TOKEN", "dev-token"), "Bearer token for protected routes")
+	skipHealth := flag.Bool("skip-health", false, "skip GET /health before the run")
+	logEvery := flag.Duration("log-every", 15*time.Second, "progress log interval, 0 disables logs")
 	flag.Parse()
 
 	*baseURL = strings.TrimSuffix(strings.TrimSpace(*baseURL), "/")
@@ -86,30 +203,21 @@ func main() {
 	if *qps <= 0 {
 		log.Fatal("qps must be > 0")
 	}
-	if *qpsMin <= 0 || *qpsMax < *qpsMin {
-		log.Fatal("need 0 < qps-min <= qps-max")
-	}
-	pk := patternKind(strings.ToLower(strings.TrimSpace(*pattern)))
-	switch pk {
-	case patternSteady, patternWave, patternSteps, patternBurst, patternMixed:
-	default:
-		log.Fatalf("unknown -pattern %q (steady|wave|steps|burst|mixed)", *pattern)
-	}
-	if pk == patternWave && *wavePeriod < time.Second {
-		log.Fatal("wave-period must be >= 1s")
-	}
-	if pk == patternSteps && *stepInterval < time.Second {
-		log.Fatal("step-interval must be >= 1s")
-	}
-	if pk == patternBurst && (*burstOff < time.Second || *burstOn < time.Second) {
-		log.Fatal("burst-off and burst-on must be >= 1s")
+	scenarios, err := scenariosFor(*profile)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	client := &http.Client{Timeout: *timeout}
+	r := &runner{
+		baseURL:   *baseURL,
+		authToken: strings.TrimSpace(*authToken),
+		client:    &http.Client{Timeout: *timeout},
+	}
+	r.stats.init()
 
 	if !*skipHealth {
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-		if err := pingHealth(ctx, client, *baseURL); err != nil {
+		if err := r.health(ctx); err != nil {
 			cancel()
 			log.Fatalf("health check: %v", err)
 		}
@@ -117,71 +225,33 @@ func main() {
 		log.Printf("health OK, base URL %s", *baseURL)
 	}
 
-	start := time.Now()
-	endAt := start.Add(*duration)
-
-	var milliQPS int64
-	setMilliQPS(&milliQPS, resolveQPS(pk, start, start, *qps, *qpsMin, *qpsMax, *wavePeriod, *stepInterval, *burstOff, *burstOn))
-
-	stopSched := make(chan struct{})
-	var schedWG sync.WaitGroup
-	schedWG.Add(1)
-	go func() {
-		defer schedWG.Done()
-		tick := time.NewTicker(500 * time.Millisecond)
-		defer tick.Stop()
-		var lastLog time.Time
-		for {
-			select {
-			case <-stopSched:
-				return
-			case <-tick.C:
-				now := time.Now()
-				if now.After(endAt) {
-					return
-				}
-				q := resolveQPS(pk, start, now, *qps, *qpsMin, *qpsMax, *wavePeriod, *stepInterval, *burstOff, *burstOn)
-				setMilliQPS(&milliQPS, q)
-				if *logEvery > 0 && (lastLog.IsZero() || now.Sub(lastLog) >= *logEvery) {
-					log.Printf("target qps ≈ %.2f (%s), elapsed %s / %s", q, pk, now.Sub(start).Round(time.Second), (*duration).Round(time.Second))
-					lastLog = now
-				}
-			}
-		}
-	}()
-
-	var okCount, errCount int64
+	endAt := time.Now().Add(*duration)
 	var wg sync.WaitGroup
+	log.Printf("load: profile=%s duration=%s workers=%d qps=%.1f", *profile, *duration, *workers, *qps)
 
-	log.Printf("load: pattern=%s duration=%s workers=%d qps[steady]=%.1f range=[%.1f,%.1f]",
-		pk, *duration, *workers, *qps, *qpsMin, *qpsMax)
+	stopProgress := make(chan struct{})
+	go progressLogger(stopProgress, *logEvery, endAt, *profile, *qps)
 
 	for i := 0; i < *workers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			rnd := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID)*1_000_003))
-			for {
-				now := time.Now()
-				if now.After(endAt) {
-					return
-				}
-				q := getMilliQPS(&milliQPS)
-				sleep := workerSleep(*workers, q)
-
+			sleep := workerSleep(*workers, *qps)
+			for time.Now().Before(endAt) {
 				reqCtx, cancel := context.WithTimeout(context.Background(), *timeout)
-				err := postTransaction(reqCtx, client, *baseURL, *authToken, rnd, &okCount, &errCount)
+				sc := chooseScenario(scenarios, rnd)
+				res := sc.run(reqCtx, r, rnd)
+				if res.scenario == "" {
+					res.scenario = sc.name
+				}
 				cancel()
-				if err != nil {
-					log.Printf("worker %d: %v", workerID, err)
+				r.stats.record(res)
+				if res.err != nil {
+					log.Printf("%s: %v", sc.name, res.err)
 				}
 
-				now = time.Now()
-				if now.After(endAt) {
-					return
-				}
-				rem := time.Until(endAt)
-				if sleep > rem {
+				if rem := time.Until(endAt); rem < sleep {
 					time.Sleep(rem)
 					return
 				}
@@ -191,146 +261,259 @@ func main() {
 	}
 
 	wg.Wait()
-	close(stopSched)
-	schedWG.Wait()
+	close(stopProgress)
+	r.stats.print(*profile)
 
-	ok := atomic.LoadInt64(&okCount)
-	bad := atomic.LoadInt64(&errCount)
-	fmt.Printf("\nload finished: ok=%d errors=%d pattern=%s (Grafana / Prometheus)\n", ok, bad, pk)
-	if bad > 0 {
+	var errors int
+	r.stats.mu.Lock()
+	for _, row := range r.stats.rows {
+		errors += row.bad
+	}
+	r.stats.mu.Unlock()
+	if errors > 0 {
 		os.Exit(1)
 	}
 }
 
-func setMilliQPS(p *int64, qps float64) {
-	qps = clampQPS(qps)
-	atomic.StoreInt64(p, int64(qps*1000+0.5))
-}
+func scenariosFor(profile string) ([]scenario, error) {
+	create := scenario{"create", 35, runCreate}
+	list := scenario{"list", 20, runList}
+	get := scenario{"get_by_id", 15, runGet}
+	update := scenario{"update", 10, runUpdate}
+	analytics := scenario{"analytics", 10, runAnalytics}
+	del := scenario{"delete", 5, runDelete}
+	replay := scenario{"idempotency_replay", 3, runIdempotencyReplay}
+	conflict := scenario{"idempotency_conflict", 1, runIdempotencyConflict}
+	forbidden := scenario{"forbidden", 1, runForbidden}
+	unauthorized := scenario{"unauthorized", 1, runUnauthorized}
 
-func getMilliQPS(p *int64) float64 {
-	return float64(atomic.LoadInt64(p)) / 1000
-}
-
-func clampQPS(q float64) float64 {
-	const minQ = 0.25
-	const maxQ = 500
-	if q < minQ {
-		return minQ
-	}
-	if q > maxQ {
-		return maxQ
-	}
-	return q
-}
-
-func workerSleep(workers int, qps float64) time.Duration {
-	if qps <= 0 {
-		qps = 0.25
-	}
-	s := time.Duration(float64(time.Second) * float64(workers) / qps)
-	if s < time.Millisecond {
-		s = time.Millisecond
-	}
-	return s
-}
-
-func resolveQPS(
-	p patternKind,
-	start, now time.Time,
-	qps, qpsMin, qpsMax float64,
-	wavePeriod, stepInterval, burstOff, burstOn time.Duration,
-) float64 {
-	elapsed := now.Sub(start)
-	switch p {
-	case patternSteady:
-		return qps
-	case patternWave:
-		if wavePeriod <= 0 {
-			return qps
-		}
-		t := elapsed.Seconds()
-		phase := 2 * math.Pi * t / wavePeriod.Seconds()
-		mid := (qpsMax + qpsMin) / 2
-		amp := (qpsMax - qpsMin) / 2
-		return mid + amp*math.Sin(phase)
-	case patternSteps:
-		if stepInterval <= 0 {
-			return qpsMin
-		}
-		step := int(elapsed / stepInterval)
-		if step%2 == 0 {
-			return qpsMin
-		}
-		return qpsMax
-	case patternBurst:
-		cycle := burstOff + burstOn
-		if cycle <= 0 {
-			return qpsMin
-		}
-		pos := elapsed % cycle
-		if pos < burstOff {
-			return qpsMin
-		}
-		return qpsMax
-	case patternMixed:
-		return mixedQPS(elapsed, qpsMin, qpsMax)
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "smoke":
+		return []scenario{create, list, get, analytics}, nil
+	case "balanced", "":
+		return []scenario{create, list, get, update, analytics, del, replay}, nil
+	case "stress":
+		create.weight = 45
+		list.weight = 20
+		get.weight = 15
+		update.weight = 10
+		analytics.weight = 8
+		del.weight = 2
+		return []scenario{create, list, get, update, analytics, del}, nil
+	case "negative":
+		replay.weight = 25
+		conflict.weight = 35
+		forbidden.weight = 20
+		unauthorized.weight = 20
+		return []scenario{replay, conflict, forbidden, unauthorized}, nil
 	default:
-		return qps
+		return nil, fmt.Errorf("unknown -profile %q (smoke|balanced|stress|negative)", profile)
 	}
 }
 
-// mixedQPS: цикл ~10 мин — спокойные окна, плавные наборы/сбросы, «пик».
-func mixedQPS(elapsed time.Duration, qpsMin, qpsMax float64) float64 {
-	const cycle = 10 * time.Minute
-	t := elapsed % cycle
-	low := qpsMin + (qpsMax-qpsMin)*0.2
-	high := qpsMax
-	switch {
-	case t < 3*time.Minute:
-		return low
-	case t < 4*time.Minute:
-		frac := float64(t-3*time.Minute) / float64(time.Minute)
-		return low + (high-low)*frac
-	case t < 6*time.Minute:
-		return high
-	case t < 7*time.Minute:
-		frac := float64(t-6*time.Minute) / float64(time.Minute)
-		return high - (high-low)*frac
-	default:
-		return low
+func chooseScenario(scenarios []scenario, rnd *rand.Rand) scenario {
+	total := 0
+	for _, sc := range scenarios {
+		total += sc.weight
 	}
+	n := rnd.Intn(total)
+	for _, sc := range scenarios {
+		if n < sc.weight {
+			return sc
+		}
+		n -= sc.weight
+	}
+	return scenarios[len(scenarios)-1]
 }
 
-func pingHealth(ctx context.Context, client *http.Client, base string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/health", nil)
+func runCreate(ctx context.Context, r *runner, rnd *rand.Rand) result {
+	body := newTxBody(rnd)
+	var resp apiResponse[transaction]
+	status, dur, err := r.doJSON(ctx, http.MethodPost, "/items", "", body, &resp, true, nil)
+	if err == nil && status == http.StatusCreated {
+		r.pool.add(resp.Data.ID)
+	}
+	return result{expected: http.StatusCreated, actual: status, duration: dur, err: err}
+}
+
+func runList(ctx context.Context, r *runner, _ *rand.Rand) result {
+	path := "/items?" + userQuery(defaultUserID)
+	status, dur, err := r.doJSON(ctx, http.MethodGet, path, "", nil, nil, true, nil)
+	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
+}
+
+func runGet(ctx context.Context, r *runner, rnd *rand.Rand) result {
+	id, ok := r.pool.pick(rnd)
+	if !ok {
+		res := runCreate(ctx, r, rnd)
+		res.scenario = "create"
+		return res
+	}
+	path := "/items/" + url.PathEscape(id) + "?" + userQuery(defaultUserID)
+	status, dur, err := r.doJSON(ctx, http.MethodGet, path, "", nil, nil, true, nil)
+	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
+}
+
+func runUpdate(ctx context.Context, r *runner, rnd *rand.Rand) result {
+	id, ok := r.pool.pick(rnd)
+	if !ok {
+		res := runCreate(ctx, r, rnd)
+		res.scenario = "create"
+		return res
+	}
+	body := newTxBody(rnd)
+	body.ExternalID = nil
+	body.Description = stringPtr("load test updated")
+	status, dur, err := r.doJSON(ctx, http.MethodPut, "/items/"+url.PathEscape(id), "", body, nil, true, nil)
+	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
+}
+
+func runAnalytics(ctx context.Context, r *runner, _ *rand.Rand) result {
+	to := time.Now().UTC()
+	from := to.Add(-24 * time.Hour)
+	q := url.Values{}
+	q.Set("user_id", defaultUserID)
+	q.Set("from", from.Format(time.RFC3339))
+	q.Set("to", to.Format(time.RFC3339))
+	status, dur, err := r.doJSON(ctx, http.MethodGet, "/analytics?"+q.Encode(), "", nil, nil, true, nil)
+	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
+}
+
+func runDelete(ctx context.Context, r *runner, rnd *rand.Rand) result {
+	id, ok := r.pool.pop(rnd)
+	if !ok {
+		res := runCreate(ctx, r, rnd)
+		res.scenario = "create"
+		return res
+	}
+	path := "/items/" + url.PathEscape(id) + "?" + userQuery(defaultUserID)
+	status, dur, err := r.doJSON(ctx, http.MethodDelete, path, "", nil, nil, true, nil)
+	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
+}
+
+func runIdempotencyReplay(ctx context.Context, r *runner, rnd *rand.Rand) result {
+	key := fmt.Sprintf("load-replay-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&extSeq, 1))
+	body := newTxBody(rnd)
+	var first apiResponse[transaction]
+	status, _, err := r.doJSON(ctx, http.MethodPost, "/items", key, body, &first, true, nil)
+	if err != nil || status != http.StatusCreated {
+		return result{expected: http.StatusCreated, actual: status, err: err}
+	}
+	r.pool.add(first.Data.ID)
+
+	var second apiResponse[transaction]
+	status, dur, err := r.doJSON(ctx, http.MethodPost, "/items", key, body, &second, true, nil)
+	return result{expected: http.StatusCreated, actual: status, duration: dur, err: err}
+}
+
+func runIdempotencyConflict(ctx context.Context, r *runner, rnd *rand.Rand) result {
+	key := fmt.Sprintf("load-conflict-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&extSeq, 1))
+	body := newTxBody(rnd)
+	var first apiResponse[transaction]
+	status, _, err := r.doJSON(ctx, http.MethodPost, "/items", key, body, &first, true, nil)
+	if err != nil || status != http.StatusCreated {
+		return result{expected: http.StatusCreated, actual: status, err: err}
+	}
+	r.pool.add(first.Data.ID)
+
+	changed := body
+	changed.Amount = fmt.Sprintf("%.2f", 500.0+rnd.Float64()*200.0)
+	status, dur, err := r.doJSON(ctx, http.MethodPost, "/items", key, changed, nil, true, nil)
+	return result{expected: http.StatusConflict, actual: status, duration: dur, err: err}
+}
+
+func runForbidden(ctx context.Context, r *runner, _ *rand.Rand) result {
+	status, dur, err := r.doJSON(ctx, http.MethodGet, "/items?"+userQuery(wrongUserID), "", nil, nil, true, nil)
+	return result{expected: http.StatusForbidden, actual: status, duration: dur, err: err}
+}
+
+func runUnauthorized(ctx context.Context, r *runner, _ *rand.Rand) result {
+	status, dur, err := r.doJSON(ctx, http.MethodGet, "/items?"+userQuery(defaultUserID), "", nil, nil, false, nil)
+	return result{expected: http.StatusUnauthorized, actual: status, duration: dur, err: err}
+}
+
+func (r *runner) health(ctx context.Context) error {
+	status, _, err := r.doJSON(ctx, http.MethodGet, "/health", "", nil, nil, false, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("GET /health: %s: %s", resp.Status, string(body))
+	if status != http.StatusOK {
+		return fmt.Errorf("GET /health: status %d", status)
 	}
 	return nil
 }
 
-func postTransaction(ctx context.Context, client *http.Client, base string, authToken string, rnd *rand.Rand, okCount, errCount *int64) error {
+func (r *runner) doJSON(
+	ctx context.Context,
+	method string,
+	path string,
+	idempotencyKey string,
+	body any,
+	out any,
+	withAuth bool,
+	headers map[string]string,
+) (int, time.Duration, error) {
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return 0, 0, err
+		}
+		reader = bytes.NewReader(raw)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, reader)
+	if err != nil {
+		return 0, 0, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if withAuth && r.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+r.authToken)
+	}
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	start := time.Now()
+	resp, err := r.client.Do(req)
+	dur := time.Since(start)
+	if err != nil {
+		return 0, dur, err
+	}
+	defer resp.Body.Close()
+
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if readErr != nil {
+		return resp.StatusCode, dur, readErr
+	}
+	if out != nil && len(raw) > 0 && resp.StatusCode < 500 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return resp.StatusCode, dur, fmt.Errorf("decode response: %w: body=%s", err, string(raw))
+		}
+	}
+	return resp.StatusCode, dur, nil
+}
+
+func newTxBody(rnd *rand.Rand) txBody {
 	from := defaultFromAccountID
 	cat := defaultCategoryID
 	prov := defaultProviderID
-	ext := fmt.Sprintf("smoke-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&extSeq, 1))
-	amount := fmt.Sprintf("%.2f", 5.0+rnd.Float64()*200.0)
 	desc := "load test"
-	body := createTxBody{
+	ext := fmt.Sprintf("load-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&extSeq, 1))
+	amount := 5.0 + rnd.Float64()*200.0
+	if rnd.Intn(10) == 0 {
+		amount = 1200.0 + rnd.Float64()*300.0
+	}
+	return txBody{
 		UserID:        defaultUserID,
-		Amount:        amount,
+		Amount:        fmt.Sprintf("%.2f", amount),
 		Currency:      "RUB",
 		FromAccountID: &from,
-		ToAccountID:   nil,
 		ProviderID:    &prov,
 		CategoryID:    &cat,
 		Type:          "expense",
@@ -339,38 +522,86 @@ func postTransaction(ctx context.Context, client *http.Client, base string, auth
 		ExternalID:    &ext,
 		OccurredAt:    time.Now().UTC().Format(time.RFC3339),
 	}
+}
 
-	raw, err := json.Marshal(body)
-	if err != nil {
-		atomic.AddInt64(errCount, 1)
-		return err
-	}
+func userQuery(userID string) string {
+	q := url.Values{}
+	q.Set("user_id", userID)
+	return q.Encode()
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/items", bytes.NewReader(raw))
-	if err != nil {
-		atomic.AddInt64(errCount, 1)
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(authToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(authToken))
-	}
+func stringPtr(value string) *string {
+	return &value
+}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		atomic.AddInt64(errCount, 1)
-		return err
+func workerSleep(workers int, qps float64) time.Duration {
+	sleep := time.Duration(float64(time.Second) * float64(workers) / qps)
+	if sleep < time.Millisecond {
+		return time.Millisecond
 	}
-	defer resp.Body.Close()
-	slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return sleep
+}
 
-	if resp.StatusCode == http.StatusCreated {
-		atomic.AddInt64(okCount, 1)
-		return nil
+func progressLogger(stop <-chan struct{}, every time.Duration, endAt time.Time, profile string, qps float64) {
+	if every <= 0 {
+		return
 	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tick.C:
+			if time.Now().After(endAt) {
+				return
+			}
+			log.Printf("load progress: profile=%s target_qps=%.1f remaining=%s", profile, qps, time.Until(endAt).Round(time.Second))
+		}
+	}
+}
 
-	atomic.AddInt64(errCount, 1)
-	return fmt.Errorf("POST /items: %s body=%s", resp.Status, string(slurp))
+func quantiles(values []time.Duration) (string, string, string) {
+	if len(values) == 0 {
+		return "-", "-", "-"
+	}
+	cp := append([]time.Duration(nil), values...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
+	return fmtDuration(percentile(cp, 0.50)), fmtDuration(percentile(cp, 0.95)), fmtDuration(percentile(cp, 0.99))
+}
+
+func percentile(values []time.Duration, q float64) time.Duration {
+	if len(values) == 1 {
+		return values[0]
+	}
+	i := int(q * float64(len(values)-1))
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(values) {
+		i = len(values) - 1
+	}
+	return values[i]
+}
+
+func fmtDuration(d time.Duration) string {
+	if d >= time.Second {
+		return d.Round(10 * time.Millisecond).String()
+	}
+	return d.Round(time.Millisecond).String()
+}
+
+func formatStatuses(statuses map[string]int) string {
+	keys := make([]string, 0, len(statuses))
+	for key := range statuses {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, statuses[key]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func envOrDefault(name, fallback string) string {
