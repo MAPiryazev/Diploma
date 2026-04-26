@@ -33,12 +33,7 @@ func NewDLQPublisher(brokers []string, topic string) (*DLQPublisher, error) {
 		return nil, fmt.Errorf("dlq topic is empty")
 	}
 
-	writer := &kafka.Writer{
-		Addr:         kafka.TCP(brokers...),
-		Topic:        topic,
-		RequiredAcks: kafka.RequireOne,
-		Balancer:     &kafka.LeastBytes{},
-	}
+	writer := newKafkaWriter(brokers, topic, &kafka.LeastBytes{})
 
 	return &DLQPublisher{
 		writer: writer,

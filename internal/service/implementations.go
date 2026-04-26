@@ -351,12 +351,12 @@ func (s *transactionServiceImpl) GetTransaction(ctx context.Context, txID, userI
 	return tx, nil
 }
 
-func (s *transactionServiceImpl) ListTransactions(ctx context.Context, userID string) ([]*models.Transaction, error) {
+func (s *transactionServiceImpl) ListTransactions(ctx context.Context, userID string, limit, offset int) ([]*models.Transaction, error) {
 	if err := validator.ValidateUUID(userID); err != nil {
 		return nil, err
 	}
 
-	txs, err := s.txRepo.ListByUser(ctx, userID)
+	txs, err := s.txRepo.ListByUser(ctx, userID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list transactions: %w", err)
 	}
@@ -423,6 +423,7 @@ func (s *transactionServiceImpl) UpdateTransaction(ctx context.Context, req *Upd
 		Type:          req.Type,
 		Status:        req.Status,
 		Description:   req.Description,
+		ExternalID:    req.ExternalID,
 		OccurredAt:    occurredAt,
 	}
 
@@ -516,6 +517,33 @@ func (s *analyticsServiceImpl) GetAnalytics(ctx context.Context, userID, from, t
 		Median:       median,
 		Percentile90: p90,
 	}, nil
+}
+
+func (s *analyticsServiceImpl) GetStreamAnalytics(ctx context.Context, userID, from, to string) (*StreamAnalyticsResponse, error) {
+	if err := validator.ValidateUUID(userID); err != nil {
+		return nil, err
+	}
+	if err := validator.ValidateDateRange(from, to); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.repo.GetStreamStats(ctx, userID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stream analytics: %w", err)
+	}
+
+	resp := &StreamAnalyticsResponse{
+		Rows: make([]StreamAnalyticsRow, 0, len(rows)),
+	}
+	for _, row := range rows {
+		resp.Rows = append(resp.Rows, StreamAnalyticsRow(row))
+		resp.Totals.CreatedCount += row.CreatedCount
+		resp.Totals.UpdatedCount += row.UpdatedCount
+		resp.Totals.DeletedCount += row.DeletedCount
+		resp.Totals.StatusChangedCount += row.StatusChangedCount
+	}
+
+	return resp, nil
 }
 
 func (s *analyticsServiceImpl) GetSum(ctx context.Context, userID, from, to string) (string, error) {

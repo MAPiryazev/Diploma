@@ -16,6 +16,7 @@ import (
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/config"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/db"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/security"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -58,6 +59,7 @@ func main() {
 
 	processedStore := events.NewPostgresProcessedEventsStore(database)
 	monitoringStore := events.NewPostgresMonitoringEventsStore(database)
+	statsStore := events.NewPostgresTransactionEventStatsStore(database)
 
 	dlqPublisher, err := events.NewDLQPublisher(cfg.Kafka.Brokers, cfg.Kafka.DLQTopic)
 	if err != nil {
@@ -102,7 +104,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runConsumeLoop(ctx, reader, processedStore, monitoringStore, dlqPublisher, cfg.Monitoring.LargeAmountThreshold)
+		errCh <- runConsumeLoop(ctx, reader, processedStore, monitoringStore, statsStore, dlqPublisher, cfg.Monitoring.LargeAmountThreshold)
 	}()
 
 	sigChan := make(chan os.Signal, 1)
@@ -148,6 +150,7 @@ func runConsumeLoop(
 	reader *kafka.Reader,
 	processedStore events.ProcessedEventsStore,
 	monitoringStore events.MonitoringEventsStore,
+	statsStore events.TransactionEventStatsStore,
 	dlqPublisher *events.DLQPublisher,
 	largeAmountThreshold float64,
 ) error {
@@ -160,7 +163,7 @@ func runConsumeLoop(
 			return fmt.Errorf("fetch message: %w", err)
 		}
 
-		handleMessage(ctx, reader, msg, processedStore, monitoringStore, dlqPublisher, largeAmountThreshold)
+		handleMessage(ctx, reader, msg, processedStore, monitoringStore, statsStore, dlqPublisher, largeAmountThreshold)
 	}
 }
 
@@ -170,10 +173,11 @@ func handleMessage(
 	msg kafka.Message,
 	processedStore events.ProcessedEventsStore,
 	monitoringStore events.MonitoringEventsStore,
+	statsStore events.TransactionEventStatsStore,
 	dlqPublisher *events.DLQPublisher,
 	largeAmountThreshold float64,
 ) {
-	env, err := events.ParseTransactionCreatedJSON(msg.Value)
+	env, err := events.ParseTransactionEventJSON(msg.Value)
 	if err != nil {
 		observability.RecordKafkaConsumerInvalid()
 		log.Printf("invalid message: partition=%d offset=%d err=%v", msg.Partition, msg.Offset, err)
@@ -216,11 +220,12 @@ func handleMessage(
 			backoff *= 2
 		}
 
-		lastErr = processTransactionCreated(ctx, env, monitoringStore, largeAmountThreshold)
+		lastErr = processTransactionEvent(ctx, env, monitoringStore, statsStore, largeAmountThreshold)
 		if lastErr == nil {
 			observability.ObserveKafkaConsumerHandleDuration(time.Since(start))
 			observability.ObserveKafkaConsumerEventProcessingLag(env.EventTime)
-			observability.RecordKafkaConsumerProcessed()
+			observability.ObserveKafkaConsumerKafkaProcessingLag(msg.Time)
+			observability.RecordKafkaConsumerProcessed(env.EventType)
 			commitMessage(ctx, reader, msg)
 			return
 		}
@@ -243,7 +248,7 @@ func publishDLQ(
 	ctx context.Context,
 	publisher *events.DLQPublisher,
 	msg kafka.Message,
-	env *events.TransactionCreatedEnvelope,
+	env *events.TransactionEventEnvelope,
 	reason string,
 ) {
 	eventID := ""
@@ -271,20 +276,23 @@ func publishDLQ(
 	observability.RecordKafkaConsumerDLQPublished()
 }
 
-func processTransactionCreated(
+func processTransactionEvent(
 	ctx context.Context,
-	env *events.TransactionCreatedEnvelope,
+	env *events.TransactionEventEnvelope,
 	monitoringStore events.MonitoringEventsStore,
+	statsStore events.TransactionEventStatsStore,
 	largeAmountThreshold float64,
 ) error {
-	tx := env.Transaction
+	tx := transactionForEvent(env)
 	if tx == nil {
 		return errors.New("transaction payload is nil")
 	}
 
 	log.Printf(
-		"transaction.created processed event_id=%s user_id=%s amount=%s currency=%s type=%s status=%s",
+		"%s processed event_id=%s tx_id=%s user_id=%s amount=%s currency=%s type=%s status=%s",
+		env.EventType,
 		security.MaskID(env.EventID),
+		security.MaskID(env.AggregateID),
 		security.MaskID(tx.UserID),
 		security.MaskAmount(tx.Amount),
 		tx.Currency,
@@ -292,7 +300,14 @@ func processTransactionCreated(
 		tx.Status,
 	)
 
-	if largeAmountThreshold > 0 {
+	if statsStore != nil {
+		if err := statsStore.Apply(ctx, buildTransactionEventStat(env, tx)); err != nil {
+			return err
+		}
+		observability.RecordTransactionProjectionApplied(env.EventType)
+	}
+
+	if largeAmountThreshold > 0 && env.EventType != events.EventTypeTransactionDeleted {
 		amount, err := strconv.ParseFloat(strings.TrimSpace(tx.Amount), 64)
 		if err != nil {
 			return fmt.Errorf("parse transaction amount: %w", err)
@@ -327,4 +342,40 @@ func processTransactionCreated(
 	}
 
 	return nil
+}
+
+func transactionForEvent(env *events.TransactionEventEnvelope) *models.Transaction {
+	if env == nil {
+		return nil
+	}
+	if env.After != nil {
+		return env.After
+	}
+	if env.Transaction != nil {
+		return env.Transaction
+	}
+	return env.Before
+}
+
+func buildTransactionEventStat(env *events.TransactionEventEnvelope, tx *models.Transaction) events.TransactionEventStat {
+	stat := events.TransactionEventStat{
+		UserID:    tx.UserID,
+		Currency:  tx.Currency,
+		StatDate:  tx.OccurredAt,
+		EventTime: env.EventTime,
+	}
+
+	switch env.EventType {
+	case events.EventTypeTransactionCreated:
+		stat.CreatedCount = 1
+		stat.CreatedAmount = tx.Amount
+	case events.EventTypeTransactionUpdated:
+		stat.UpdatedCount = 1
+	case events.EventTypeTransactionDeleted:
+		stat.DeletedCount = 1
+	case events.EventTypeStatusChanged:
+		stat.StatusChangedCount = 1
+	}
+
+	return stat
 }

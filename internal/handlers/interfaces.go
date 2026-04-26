@@ -12,6 +12,7 @@ type TransactionHandler interface {
 
 type AnalyticsHandler interface {
 	GetAnalytics(w http.ResponseWriter, r *http.Request)
+	GetStreamAnalytics(w http.ResponseWriter, r *http.Request)
 }
 
 type HealthHandler interface {

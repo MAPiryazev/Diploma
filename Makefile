@@ -6,7 +6,7 @@ GRAFANA_PORT ?= 3000
 KAFKA_EXTERNAL_PORT ?= 9094
 KAFKA_EXPORTER_PORT ?= 9308
 
-# Сценарная нагрузка на API (cmd/load): smoke|balanced|stress|negative
+# Сценарная нагрузка на API (cmd/load): smoke|balanced|stress|events|negative
 # Демо без ожидаемых ошибок: make load-demo
 # Высокая нагрузка: make load-stress
 # Демонстрация ошибок/idempotency: make load-errors
@@ -32,7 +32,11 @@ LOAD_ERRORS_DURATION ?= 2m
 LOAD_ERRORS_QPS ?= 8
 LOAD_ERRORS_WORKERS ?= 6
 
-.PHONY: run run-consumer dlq-replay jwt-token load load-demo load-stress load-errors docker-up docker-stop docker-down-v help
+LOAD_EVENTS_DURATION ?= 90s
+LOAD_EVENTS_QPS ?= 4
+LOAD_EVENTS_WORKERS ?= 3
+
+.PHONY: run run-consumer dlq-replay jwt-token load load-demo load-stress load-events load-errors docker-up docker-stop docker-down-v help
 
 help:
 	@echo "Targets:"
@@ -44,6 +48,7 @@ help:
 	@echo "                     - параметры: LOAD_DURATION, LOAD_PROFILE, LOAD_QPS, LOAD_WORKERS, LOAD_URL, LOAD_AUTH_TOKEN"
 	@echo "  make load-demo     - обычный чистый прогон без ожидаемых 4xx/5xx (balanced, low QPS)"
 	@echo "  make load-stress   - высокая нагрузка без ожидаемых ошибок (stress, high QPS)"
+	@echo "  make load-events   - демо event-driven lifecycle: create/update/delete + /analytics/stream"
 	@echo "  make load-errors   - демонстрация idempotency conflict / forbidden / unauthorized"
 	@echo "  make docker-up     - db + app + consumer + prometheus + grafana + kafka (ports from .env)"
 	@echo "                     - app: http://localhost:$(APP_HTTP_PORT)  prometheus: http://localhost:$(PROMETHEUS_PORT)"
@@ -74,6 +79,9 @@ load-demo:
 
 load-stress:
 	$(MAKE) load LOAD_PROFILE=stress LOAD_DURATION="$(LOAD_STRESS_DURATION)" LOAD_QPS="$(LOAD_STRESS_QPS)" LOAD_WORKERS="$(LOAD_STRESS_WORKERS)" LOAD_ARGS="$(LOAD_ARGS)"
+
+load-events:
+	$(MAKE) load LOAD_PROFILE=events LOAD_DURATION="$(LOAD_EVENTS_DURATION)" LOAD_QPS="$(LOAD_EVENTS_QPS)" LOAD_WORKERS="$(LOAD_EVENTS_WORKERS)" LOAD_ARGS="$(LOAD_ARGS)"
 
 load-errors:
 	$(MAKE) load LOAD_PROFILE=negative LOAD_DURATION="$(LOAD_ERRORS_DURATION)" LOAD_QPS="$(LOAD_ERRORS_QPS)" LOAD_WORKERS="$(LOAD_ERRORS_WORKERS)" LOAD_ARGS="$(LOAD_ARGS)"

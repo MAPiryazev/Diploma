@@ -9,6 +9,13 @@ import (
 )
 
 var (
+	apiLatencyBuckets = []float64{
+		0.001, 0.0025, 0.005, 0.0075,
+		0.01, 0.025, 0.05, 0.075,
+		0.1, 0.25, 0.5, 0.75,
+		1, 1.5, 2, 2.5, 5, 10,
+	}
+
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "http_requests_total",
@@ -21,7 +28,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "http_request_duration_seconds",
 			Help:    "Duration of HTTP requests handled by the service.",
-			Buckets: prometheus.DefBuckets,
+			Buckets: apiLatencyBuckets,
 		},
 		[]string{"method", "route"},
 	)
@@ -60,7 +67,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "api_usecase_duration_seconds",
 			Help:    "Duration of API requests grouped by stable business use-case.",
-			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+			Buckets: apiLatencyBuckets,
 		},
 		[]string{"usecase"},
 	)

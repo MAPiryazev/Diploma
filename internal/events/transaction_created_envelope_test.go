@@ -13,9 +13,10 @@ func TestTransactionCreatedEnvelope_Validate_ok(t *testing.T) {
 		EventID:       "e1",
 		EventType:     EventTypeTransactionCreated,
 		EventTime:     time.Now().UTC(),
-		CorrelationID: "e1",
+		CorrelationID: "tx1",
 		SchemaVersion: SupportedSchemaVersion,
 		Source:        "test",
+		AggregateID:   "e1",
 		Transaction:   tx,
 	}
 	if err := env.Validate(); err != nil {
@@ -29,6 +30,7 @@ func TestTransactionCreatedEnvelope_Validate_mismatchedIDs(t *testing.T) {
 		EventID:       "e1",
 		EventType:     EventTypeTransactionCreated,
 		SchemaVersion: SupportedSchemaVersion,
+		AggregateID:   "e1",
 		Transaction:   tx,
 	}
 	if err := env.Validate(); err == nil {
@@ -44,6 +46,7 @@ func TestParseTransactionCreatedJSON(t *testing.T) {
 		"correlation_id":"e1",
 		"schema_version":1,
 		"source":"diploma-app",
+		"aggregate_id":"e1",
 		"transaction":{
 			"id":"e1",
 			"user_id":"u1",

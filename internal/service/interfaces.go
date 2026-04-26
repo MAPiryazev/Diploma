@@ -33,13 +33,14 @@ type ProviderService interface {
 type TransactionService interface {
 	CreateTransaction(ctx context.Context, req *CreateTransactionRequest) (*models.Transaction, error)
 	GetTransaction(ctx context.Context, txID, userID string) (*models.Transaction, error)
-	ListTransactions(ctx context.Context, userID string) ([]*models.Transaction, error)
+	ListTransactions(ctx context.Context, userID string, limit, offset int) ([]*models.Transaction, error)
 	UpdateTransaction(ctx context.Context, req *UpdateTransactionRequest) error
 	DeleteTransaction(ctx context.Context, txID, userID string) error
 }
 
 type AnalyticsService interface {
 	GetAnalytics(ctx context.Context, userID, from, to string) (*AnalyticsResponse, error)
+	GetStreamAnalytics(ctx context.Context, userID, from, to string) (*StreamAnalyticsResponse, error)
 	GetSum(ctx context.Context, userID, from, to string) (string, error)
 	GetAvg(ctx context.Context, userID, from, to string) (string, error)
 	GetCount(ctx context.Context, userID, from, to string) (int64, error)
@@ -95,6 +96,7 @@ type UpdateTransactionRequest struct {
 	Type          string  `json:"type"`
 	Status        string  `json:"status"`
 	Description   *string `json:"description"`
+	ExternalID    *string `json:"external_id"`
 	OccurredAt    string  `json:"occurred_at"`
 }
 
@@ -105,4 +107,27 @@ type AnalyticsResponse struct {
 	Count        int64  `json:"count"`
 	Median       string `json:"median"`
 	Percentile90 string `json:"percentile_90"`
+}
+
+type StreamAnalyticsResponse struct {
+	Rows   []StreamAnalyticsRow `json:"rows"`
+	Totals StreamAnalyticsTotal `json:"totals"`
+}
+
+type StreamAnalyticsRow struct {
+	StatDate           string `json:"stat_date"`
+	Currency           string `json:"currency"`
+	CreatedCount       int64  `json:"created_count"`
+	UpdatedCount       int64  `json:"updated_count"`
+	DeletedCount       int64  `json:"deleted_count"`
+	StatusChangedCount int64  `json:"status_changed_count"`
+	CreatedAmount      string `json:"created_amount"`
+	LastEventTime      string `json:"last_event_time"`
+}
+
+type StreamAnalyticsTotal struct {
+	CreatedCount       int64 `json:"created_count"`
+	UpdatedCount       int64 `json:"updated_count"`
+	DeletedCount       int64 `json:"deleted_count"`
+	StatusChangedCount int64 `json:"status_changed_count"`
 }

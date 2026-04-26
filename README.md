@@ -31,11 +31,11 @@
 
 Поток данных выглядит так:
 
-1. Клиент создает транзакцию через `POST /items`.
-2. API валидирует и записывает транзакцию в PostgreSQL.
-3. После успешной записи API публикует событие `transaction.created` в Kafka.
+1. Клиент создает, обновляет или удаляет транзакцию через `/items`.
+2. API валидирует запрос и в одной PostgreSQL-транзакции записывает бизнес-изменение и outbox-событие.
+3. Фоновый outbox relay публикует `transaction.*` в Kafka и помечает событие отправленным.
 4. Consumer читает событие, валидирует envelope, проверяет дедупликацию и фиксирует обработку.
-5. Если транзакция превышает настроенный порог, consumer сохраняет событие мониторинга.
+5. Consumer обновляет streaming projection `transaction_event_stats` и сохраняет monitoring events.
 6. При ошибках сообщение может попасть в DLQ.
 7. Метрики producer, consumer и lag доступны в Prometheus и Grafana.
 
@@ -71,6 +71,7 @@
 - `PUT /items/{id}` — обновление транзакции.
 - `DELETE /items/{id}` — мягкое удаление транзакции.
 - `GET /analytics` — аналитика за период.
+- `GET /analytics/stream` — статистика, построенная consumer-ом из Kafka events.
 
 Пользовательские маршруты требуют заголовок:
 
@@ -100,21 +101,23 @@ Authorization: Bearer dev-token
 Идемпотентность хранится в таблице `idempotency_keys`.
 
 ### Kafka
-Kafka в проекте используется как событийная шина вокруг операции создания транзакции.
+Kafka в проекте используется как событийная шина вокруг жизненного цикла транзакции.
 
 Что уже реализовано:
 
-- API публикует событие `transaction.created`.
+- API сохраняет `transaction.created`, `transaction.updated`, `transaction.deleted` и `transaction.status_changed` в transactional outbox.
+- Outbox relay асинхронно публикует готовые события в Kafka.
 - Consumer читает события из topic `transactions.events`.
 - Consumer валидирует JSON-envelope.
 - Дедупликация идет по `event_id` через таблицу `processed_events`.
 - Крупные операции фиксируются как monitoring events в таблице `monitoring_events`.
+- Потоковая статистика обновляется consumer-ом в таблице `transaction_event_stats`.
 - Для ошибок обработки используется topic `transactions.events.dlq`.
 - Есть утилита replay из DLQ в основной topic.
 - Добавлены retry перед отправкой в DLQ.
 
 ## Контракт события Kafka
-Событие `transaction.created` имеет JSON-envelope:
+События транзакций имеют общий JSON-envelope:
 
 ```json
 {
@@ -124,6 +127,7 @@ Kafka в проекте используется как событийная ш�
   "correlation_id": "uuid",
   "schema_version": 1,
   "source": "diploma-app",
+  "aggregate_id": "transaction-uuid",
   "transaction": {
     "id": "uuid",
     "user_id": "uuid",
@@ -145,13 +149,15 @@ Kafka в проекте используется как событийная ш�
 }
 ```
 
+Для `transaction.updated` и `transaction.status_changed` дополнительно передаются `before` и `after`; для `transaction.status_changed` также есть `old_status` и `new_status`. Для `transaction.deleted` передается удаленная транзакция с заполненным `deleted_at`.
+
 Consumer проверяет:
 
 - `event_id` не пустой;
-- `event_type == transaction.created`;
+- `event_type` входит в поддержанный набор `transaction.created`, `transaction.updated`, `transaction.deleted`, `transaction.status_changed`;
 - `schema_version == 1`;
-- `transaction` присутствует;
-- `transaction.id == event_id`.
+- `aggregate_id` не пустой;
+- payload события относится к тому же `aggregate_id`.
 
 ## Правила валидации транзакций
 
@@ -425,9 +431,9 @@ make load LOAD_DURATION=60s LOAD_QPS=10 LOAD_WORKERS=6
 ## Kafka и consumer: как это работает
 
 ### Producer
-После успешного создания транзакции API публикует событие в Kafka.
+После успешного изменения транзакции API публикует событие в Kafka через transactional outbox.
 
-Это происходит после записи в PostgreSQL, поэтому Kafka здесь не заменяет БД, а фиксирует факт совершившейся операции.
+Это происходит после записи в PostgreSQL, поэтому Kafka здесь не заменяет БД, а фиксирует поток совершившихся доменных изменений.
 
 ### Consumer
 Consumer:
@@ -435,7 +441,8 @@ Consumer:
 - читает `transactions.events`;
 - валидирует envelope;
 - сохраняет `event_id` в `processed_events`, чтобы исключить повторную обработку;
-- выполняет обработку события;
+- выбирает обработчик по `event_type`;
+- обновляет projection `transaction_event_stats`;
 - делает retry с backoff при ошибке handler;
 - при окончательной неудаче пишет в DLQ;
 - коммитит offsets вручную.
@@ -477,11 +484,12 @@ API публикует:
 - count создания транзакций
 - count запросов аналитики
 - метрики Kafka producer
+- метрики outbox relay
 
 ### Метрики consumer
 Consumer публикует:
 
-- успешно обработанные сообщения
+- успешно обработанные сообщения по `event_type`
 - invalid сообщения
 - duplicate сообщения
 - ошибки commit
@@ -490,6 +498,8 @@ Consumer публикует:
 - retry handler
 - длительность обработки
 - лаг «время события в envelope (`event_time`) → успешная обработка» (`kafka_consumer_event_processing_lag_seconds`)
+- лаг «timestamp сообщения в Kafka → успешная обработка» (`kafka_consumer_kafka_processing_lag_seconds`)
+- применение streaming projection (`transaction_projection_applied_total`)
 
 ### Метрики Kafka lag
 `kafka-exporter` добавляет lag consumer group и offsets.
@@ -506,7 +516,15 @@ Consumer публикует:
 
 - datasource Prometheus
 - дашборд HTTP / бизнес-метрик
-- дашборд Kafka pipeline (в т.ч. p50/p95 лага `event_time` → успешная обработка в consumer)
+- дашборд Kafka pipeline (throughput, lag consumer group, DLQ/retry/errors, p50/p95/p99 задержек Kafka/outbox/consumer)
+
+Для демонстрации event-driven lifecycle можно запустить:
+
+```bash
+make load-events
+```
+
+Профиль создает, обновляет и удаляет транзакции, а также читает `/analytics/stream`, чтобы показать projection, построенную из Kafka-событий.
 
 ## Как тестировать сервис
 

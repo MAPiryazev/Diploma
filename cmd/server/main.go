@@ -51,7 +51,7 @@ func main() {
 		Account:     repository.NewAccountRepository(database),
 		Category:    repository.NewCategoryRepository(database),
 		Provider:    repository.NewProviderRepository(database),
-		Transaction: repository.NewTransactionRepository(database),
+		Transaction: repository.NewTransactionRepository(database, cfg.Kafka.Topic),
 		Analytics:   repository.NewAnalyticsRepository(database),
 		Idempotency: repository.NewIdempotencyRepository(database),
 		Audit:       repository.NewAuditRepository(database),
@@ -69,7 +69,16 @@ func main() {
 		}
 	}()
 
-	handlers := implementation.NewHandlers(services, repos, database, publisher)
+	outboxRelay := events.NewOutboxRelay(
+		events.NewPostgresOutboxStore(database),
+		publisher,
+		events.OutboxRelayConfig{},
+	)
+	outboxCtx, stopOutbox := context.WithCancel(context.Background())
+	defer stopOutbox()
+	go outboxRelay.Run(outboxCtx)
+
+	handlers := implementation.NewHandlers(services, repos, database)
 
 	router := http.NewServeMux()
 
@@ -95,6 +104,7 @@ func main() {
 
 	analyticsHandler := handlers.Analytics()
 	router.Handle("GET /analytics", auth(http.HandlerFunc(analyticsHandler.GetAnalytics)))
+	router.Handle("GET /analytics/stream", auth(http.HandlerFunc(analyticsHandler.GetStreamAnalytics)))
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
@@ -113,6 +123,8 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
+
+	stopOutbox()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

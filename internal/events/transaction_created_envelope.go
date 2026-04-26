@@ -1,6 +1,8 @@
 package events
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,48 +13,176 @@ import (
 
 const (
 	EventTypeTransactionCreated = "transaction.created"
+	EventTypeTransactionUpdated = "transaction.updated"
+	EventTypeTransactionDeleted = "transaction.deleted"
+	EventTypeStatusChanged      = "transaction.status_changed"
 	SupportedSchemaVersion      = 1
+	EventSourceDiplomaApp       = "diploma-app"
+	DefaultTransactionsTopic    = "transactions.events"
 )
 
-// TransactionCreatedEnvelope is the JSON contract for transaction.created (producer and consumer).
-type TransactionCreatedEnvelope struct {
+// TransactionEventEnvelope is the JSON contract for transaction lifecycle events.
+type TransactionEventEnvelope struct {
 	EventID       string              `json:"event_id"`
 	EventType     string              `json:"event_type"`
 	EventTime     time.Time           `json:"event_time"`
 	CorrelationID string              `json:"correlation_id"`
 	SchemaVersion int                 `json:"schema_version"`
 	Source        string              `json:"source"`
-	Transaction   *models.Transaction `json:"transaction"`
+	AggregateID   string              `json:"aggregate_id"`
+	Transaction   *models.Transaction `json:"transaction,omitempty"`
+	Before        *models.Transaction `json:"before,omitempty"`
+	After         *models.Transaction `json:"after,omitempty"`
+	OldStatus     string              `json:"old_status,omitempty"`
+	NewStatus     string              `json:"new_status,omitempty"`
 }
 
-func (e *TransactionCreatedEnvelope) Validate() error {
+// TransactionCreatedEnvelope is kept as an alias for older tests and tools.
+type TransactionCreatedEnvelope = TransactionEventEnvelope
+
+func NewTransactionCreatedEnvelope(tx *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
+	if tx == nil {
+		return nil, errors.New("transaction is nil")
+	}
+	return NewTransactionEventEnvelope(EventTypeTransactionCreated, tx.ID, tx, nil, nil, "", "", eventTime)
+}
+
+func NewTransactionUpdatedEnvelope(before, after *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
+	if after == nil {
+		return nil, errors.New("transaction after is nil")
+	}
+	return NewTransactionEventEnvelope(EventTypeTransactionUpdated, after.ID, after, before, after, "", "", eventTime)
+}
+
+func NewTransactionDeletedEnvelope(tx *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
+	if tx == nil {
+		return nil, errors.New("transaction is nil")
+	}
+	return NewTransactionEventEnvelope(EventTypeTransactionDeleted, tx.ID, tx, tx, nil, "", "", eventTime)
+}
+
+func NewTransactionStatusChangedEnvelope(before, after *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
+	if before == nil {
+		return nil, errors.New("transaction before is nil")
+	}
+	if after == nil {
+		return nil, errors.New("transaction after is nil")
+	}
+	return NewTransactionEventEnvelope(EventTypeStatusChanged, after.ID, after, before, after, before.Status, after.Status, eventTime)
+}
+
+func NewTransactionEventEnvelope(
+	eventType string,
+	aggregateID string,
+	transaction *models.Transaction,
+	before *models.Transaction,
+	after *models.Transaction,
+	oldStatus string,
+	newStatus string,
+	eventTime time.Time,
+) (*TransactionEventEnvelope, error) {
+	if eventTime.IsZero() {
+		eventTime = time.Now().UTC()
+	}
+
+	eventID, err := newEventID()
+	if err != nil {
+		return nil, err
+	}
+
+	env := &TransactionEventEnvelope{
+		EventID:       eventID,
+		EventType:     eventType,
+		EventTime:     eventTime.UTC(),
+		CorrelationID: aggregateID,
+		SchemaVersion: SupportedSchemaVersion,
+		Source:        EventSourceDiplomaApp,
+		AggregateID:   aggregateID,
+		Transaction:   transaction,
+		Before:        before,
+		After:         after,
+		OldStatus:     oldStatus,
+		NewStatus:     newStatus,
+	}
+	if err := env.Validate(); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func MarshalTransactionCreatedEnvelope(tx *models.Transaction, eventTime time.Time) ([]byte, error) {
+	env, err := NewTransactionCreatedEnvelope(tx, eventTime)
+	if err != nil {
+		return nil, err
+	}
+	return MarshalTransactionEventEnvelope(env)
+}
+
+func MarshalTransactionEventEnvelope(env *TransactionEventEnvelope) ([]byte, error) {
+	if err := env.Validate(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s event: %w", env.EventType, err)
+	}
+	return payload, nil
+}
+
+func (e *TransactionEventEnvelope) Validate() error {
 	if e == nil {
 		return errors.New("envelope is nil")
 	}
 	if e.EventID == "" {
 		return errors.New("event_id is empty")
 	}
-	if e.EventType != EventTypeTransactionCreated {
-		return fmt.Errorf("unsupported event_type %q (want %q)", e.EventType, EventTypeTransactionCreated)
+	if !isSupportedTransactionEventType(e.EventType) {
+		return fmt.Errorf("unsupported event_type %q", e.EventType)
 	}
 	if e.SchemaVersion != SupportedSchemaVersion {
 		return fmt.Errorf("unsupported schema_version %d (want %d)", e.SchemaVersion, SupportedSchemaVersion)
 	}
-	if e.Transaction == nil {
-		return errors.New("transaction is nil")
+	if e.AggregateID == "" {
+		if e.Transaction != nil && e.Transaction.ID != "" {
+			e.AggregateID = e.Transaction.ID
+		} else {
+			return errors.New("aggregate_id is empty")
+		}
 	}
-	if e.Transaction.ID == "" {
-		return errors.New("transaction.id is empty")
+	if e.CorrelationID == "" {
+		e.CorrelationID = e.AggregateID
 	}
-	if e.Transaction.ID != e.EventID {
-		return fmt.Errorf("transaction.id %q does not match event_id %q", e.Transaction.ID, e.EventID)
+
+	switch e.EventType {
+	case EventTypeTransactionCreated:
+		if err := validateTransactionMatchesAggregate(e.Transaction, e.AggregateID, "transaction"); err != nil {
+			return err
+		}
+	case EventTypeTransactionUpdated:
+		if err := validateTransactionMatchesAggregate(e.After, e.AggregateID, "after"); err != nil {
+			return err
+		}
+	case EventTypeTransactionDeleted:
+		if err := validateTransactionMatchesAggregate(e.Transaction, e.AggregateID, "transaction"); err != nil {
+			return err
+		}
+	case EventTypeStatusChanged:
+		if err := validateTransactionMatchesAggregate(e.Before, e.AggregateID, "before"); err != nil {
+			return err
+		}
+		if err := validateTransactionMatchesAggregate(e.After, e.AggregateID, "after"); err != nil {
+			return err
+		}
+		if e.OldStatus == "" || e.NewStatus == "" {
+			return errors.New("status_changed event requires old_status and new_status")
+		}
 	}
 	return nil
 }
 
-// ParseTransactionCreatedJSON unmarshals and validates a transaction.created payload.
-func ParseTransactionCreatedJSON(data []byte) (*TransactionCreatedEnvelope, error) {
-	var env TransactionCreatedEnvelope
+// ParseTransactionEventJSON unmarshals and validates a transaction lifecycle payload.
+func ParseTransactionEventJSON(data []byte) (*TransactionEventEnvelope, error) {
+	var env TransactionEventEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return nil, fmt.Errorf("json unmarshal: %w", err)
 	}
@@ -60,4 +190,55 @@ func ParseTransactionCreatedJSON(data []byte) (*TransactionCreatedEnvelope, erro
 		return nil, err
 	}
 	return &env, nil
+}
+
+// ParseTransactionCreatedJSON is kept for older tools that validate created events only.
+func ParseTransactionCreatedJSON(data []byte) (*TransactionEventEnvelope, error) {
+	env, err := ParseTransactionEventJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	if env.EventType != EventTypeTransactionCreated {
+		return nil, fmt.Errorf("unsupported event_type %q (want %q)", env.EventType, EventTypeTransactionCreated)
+	}
+	return env, nil
+}
+
+func isSupportedTransactionEventType(eventType string) bool {
+	switch eventType {
+	case EventTypeTransactionCreated, EventTypeTransactionUpdated, EventTypeTransactionDeleted, EventTypeStatusChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateTransactionMatchesAggregate(tx *models.Transaction, aggregateID, field string) error {
+	if tx == nil {
+		return fmt.Errorf("%s is nil", field)
+	}
+	if tx.ID == "" {
+		return fmt.Errorf("%s.id is empty", field)
+	}
+	if tx.ID != aggregateID {
+		return fmt.Errorf("%s.id %q does not match aggregate_id %q", field, tx.ID, aggregateID)
+	}
+	return nil
+}
+
+func newEventID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate event_id: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%s-%s-%s-%s-%s",
+		hex.EncodeToString(b[0:4]),
+		hex.EncodeToString(b[4:6]),
+		hex.EncodeToString(b[6:8]),
+		hex.EncodeToString(b[8:10]),
+		hex.EncodeToString(b[10:16]),
+	), nil
 }

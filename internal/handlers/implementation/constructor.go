@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/handlers"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/repository"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/service"
@@ -66,9 +65,9 @@ func (h *handlersImpl) Health() handlers.HealthHandler {
 	return h.health
 }
 
-func NewHandlers(svcs *service.Services, repos *repository.Repositories, database *dbpg.DB, publisher events.Publisher) handlers.Handlers {
+func NewHandlers(svcs *service.Services, repos *repository.Repositories, database *dbpg.DB) handlers.Handlers {
 	return &handlersImpl{
-		transaction: newTransactionHandler(svcs.Transaction, repos.Idempotency, repos.Audit, publisher),
+		transaction: newTransactionHandler(svcs.Transaction, repos.Idempotency, repos.Audit),
 		analytics:   newAnalyticsHandler(svcs.Analytics),
 		health:      newHealthHandler(database),
 	}

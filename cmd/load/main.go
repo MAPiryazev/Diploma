@@ -187,7 +187,7 @@ func (s *stats) print(profile string) {
 func main() {
 	baseURL := flag.String("url", "http://localhost:8081", "base API URL without trailing slash")
 	duration := flag.Duration("duration", 30*time.Minute, "load duration")
-	profile := flag.String("profile", envOrDefault("LOAD_PROFILE", "balanced"), "smoke | balanced | stress | negative")
+	profile := flag.String("profile", envOrDefault("LOAD_PROFILE", "balanced"), "smoke | balanced | stress | events | negative")
 	qps := flag.Float64("qps", 8, "target total requests per second")
 	workers := flag.Int("workers", 6, "parallel workers")
 	timeout := flag.Duration("timeout", 15*time.Second, "single request timeout")
@@ -281,6 +281,7 @@ func scenariosFor(profile string) ([]scenario, error) {
 	get := scenario{"get_by_id", 15, runGet}
 	update := scenario{"update", 10, runUpdate}
 	analytics := scenario{"analytics", 10, runAnalytics}
+	streamAnalytics := scenario{"stream_analytics", 10, runStreamAnalytics}
 	del := scenario{"delete", 5, runDelete}
 	replay := scenario{"idempotency_replay", 3, runIdempotencyReplay}
 	conflict := scenario{"idempotency_conflict", 1, runIdempotencyConflict}
@@ -292,6 +293,13 @@ func scenariosFor(profile string) ([]scenario, error) {
 		return []scenario{create, list, get, analytics}, nil
 	case "balanced", "":
 		return []scenario{create, list, get, update, analytics, del, replay}, nil
+	case "events":
+		create.weight = 35
+		update.weight = 25
+		del.weight = 10
+		streamAnalytics.weight = 20
+		analytics.weight = 10
+		return []scenario{create, update, del, streamAnalytics, analytics}, nil
 	case "stress":
 		create.weight = 45
 		list.weight = 20
@@ -307,7 +315,7 @@ func scenariosFor(profile string) ([]scenario, error) {
 		unauthorized.weight = 20
 		return []scenario{replay, conflict, forbidden, unauthorized}, nil
 	default:
-		return nil, fmt.Errorf("unknown -profile %q (smoke|balanced|stress|negative)", profile)
+		return nil, fmt.Errorf("unknown -profile %q (smoke|balanced|stress|events|negative)", profile)
 	}
 }
 
@@ -376,6 +384,17 @@ func runAnalytics(ctx context.Context, r *runner, _ *rand.Rand) result {
 	q.Set("from", from.Format(time.RFC3339))
 	q.Set("to", to.Format(time.RFC3339))
 	status, dur, err := r.doJSON(ctx, http.MethodGet, "/analytics?"+q.Encode(), "", nil, nil, true, nil)
+	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
+}
+
+func runStreamAnalytics(ctx context.Context, r *runner, _ *rand.Rand) result {
+	to := time.Now().UTC().Add(24 * time.Hour)
+	from := to.Add(-48 * time.Hour)
+	q := url.Values{}
+	q.Set("user_id", defaultUserID)
+	q.Set("from", from.Format(time.RFC3339))
+	q.Set("to", to.Format(time.RFC3339))
+	status, dur, err := r.doJSON(ctx, http.MethodGet, "/analytics/stream?"+q.Encode(), "", nil, nil, true, nil)
 	return result{expected: http.StatusOK, actual: status, duration: dur, err: err}
 }
 

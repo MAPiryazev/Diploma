@@ -11,7 +11,7 @@ var (
 			Name: "kafka_producer_messages_sent_total",
 			Help: "Kafka producer messages successfully written (WriteMessages returned nil).",
 		},
-		[]string{"topic"},
+		[]string{"topic", "event_type"},
 	)
 
 	kafkaProducerErrors = promauto.NewCounterVec(
@@ -19,14 +19,14 @@ var (
 			Name: "kafka_producer_errors_total",
 			Help: "Kafka producer write errors (WriteMessages returned error).",
 		},
-		[]string{"topic"},
+		[]string{"topic", "event_type"},
 	)
 )
 
-func RecordKafkaProducerMessageSent(topic string) {
-	kafkaProducerMessagesSent.WithLabelValues(labelOrUnknown(topic)).Inc()
+func RecordKafkaProducerMessageSent(topic, eventType string) {
+	kafkaProducerMessagesSent.WithLabelValues(labelOrUnknown(topic), labelOrUnknown(eventType)).Inc()
 }
 
-func RecordKafkaProducerError(topic string) {
-	kafkaProducerErrors.WithLabelValues(labelOrUnknown(topic)).Inc()
+func RecordKafkaProducerError(topic, eventType string) {
+	kafkaProducerErrors.WithLabelValues(labelOrUnknown(topic), labelOrUnknown(eventType)).Inc()
 }

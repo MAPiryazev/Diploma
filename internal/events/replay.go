@@ -2,14 +2,13 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/segmentio/kafka-go"
 )
 
-// NewReplayWriter returns a writer for replaying transaction.created payloads into topic (same routing as KafkaPublisher).
+// NewReplayWriter returns a writer for replaying transaction lifecycle payloads into topic.
 func NewReplayWriter(brokers []string, topic string) (*kafka.Writer, error) {
 	if len(brokers) == 0 {
 		return nil, errors.New("brokers are empty")
@@ -17,16 +16,10 @@ func NewReplayWriter(brokers []string, topic string) (*kafka.Writer, error) {
 	if topic == "" {
 		return nil, errors.New("topic is empty")
 	}
-	return &kafka.Writer{
-		Addr:         kafka.TCP(brokers...),
-		Topic:        topic,
-		RequiredAcks: kafka.RequireOne,
-		Balancer:     &kafka.Hash{},
-	}, nil
+	return newKafkaWriter(brokers, topic, &kafka.Hash{}), nil
 }
 
-// RepublishTransactionCreatedPayload writes the original transaction.created JSON back to the main topic
-// (same key strategy as KafkaPublisher: partition by user_id).
+// RepublishTransactionCreatedPayload writes the original transaction event JSON back to the main topic.
 func RepublishTransactionCreatedPayload(ctx context.Context, w *kafka.Writer, payload []byte) error {
 	if w == nil {
 		return errors.New("writer is nil")
@@ -35,11 +28,12 @@ func RepublishTransactionCreatedPayload(ctx context.Context, w *kafka.Writer, pa
 		return errors.New("payload is empty")
 	}
 
-	if _, err := ParseTransactionCreatedJSON(payload); err != nil {
-		return fmt.Errorf("payload is not a valid transaction.created envelope: %w", err)
+	env, err := ParseTransactionEventJSON(payload)
+	if err != nil {
+		return fmt.Errorf("payload is not a valid transaction event envelope: %w", err)
 	}
 
-	key, err := userIDKeyFromTransactionCreatedJSON(payload)
+	key, err := userIDKeyFromTransactionEvent(env)
 	if err != nil {
 		return err
 	}
@@ -54,17 +48,16 @@ func RepublishTransactionCreatedPayload(ctx context.Context, w *kafka.Writer, pa
 	return nil
 }
 
-func userIDKeyFromTransactionCreatedJSON(payload []byte) (string, error) {
-	var v struct {
-		Transaction *struct {
-			UserID string `json:"user_id"`
-		} `json:"transaction"`
+func userIDKeyFromTransactionEvent(env *TransactionEventEnvelope) (string, error) {
+	tx := env.Transaction
+	if tx == nil {
+		tx = env.After
 	}
-	if err := json.Unmarshal(payload, &v); err != nil {
-		return "", fmt.Errorf("unmarshal for routing key: %w", err)
+	if tx == nil {
+		tx = env.Before
 	}
-	if v.Transaction == nil || v.Transaction.UserID == "" {
+	if tx == nil || tx.UserID == "" {
 		return "", errors.New("transaction.user_id missing for routing key")
 	}
-	return v.Transaction.UserID, nil
+	return tx.UserID, nil
 }

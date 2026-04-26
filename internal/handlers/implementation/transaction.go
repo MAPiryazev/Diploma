@@ -9,12 +9,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	apperrors "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/errors"
-	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/middleware"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
@@ -24,22 +24,22 @@ import (
 )
 
 const maxJSONBodyBytes = 1 << 20
+const defaultTransactionListLimit = 100
+const maxTransactionListLimit = 500
 
 type transactionHandler struct {
-	svc       service.TransactionService
-	idem      repository.IdempotencyRepository
-	audit     repository.AuditRepository
-	publisher events.Publisher
-	idemMu    sync.Mutex
+	svc    service.TransactionService
+	idem   repository.IdempotencyRepository
+	audit  repository.AuditRepository
+	idemMu sync.Mutex
 }
 
 func newTransactionHandler(
 	svc service.TransactionService,
 	idem repository.IdempotencyRepository,
 	audit repository.AuditRepository,
-	publisher events.Publisher,
 ) *transactionHandler {
-	return &transactionHandler{svc: svc, idem: idem, audit: audit, publisher: publisher}
+	return &transactionHandler{svc: svc, idem: idem, audit: audit}
 }
 
 func (h *transactionHandler) CreateTransaction(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +120,6 @@ func (h *transactionHandler) createTransactionIdempotent(
 	h.recordAudit(ctx, "transaction.create", &tx.ID, "success")
 
 	observability.RecordTransactionCreated(tx.Type, tx.Status)
-	h.publishTransactionCreatedEvent(ctx, tx)
 
 	payload := map[string]interface{}{
 		"status": "success",
@@ -152,7 +151,6 @@ func (h *transactionHandler) createTransactionOnce(w http.ResponseWriter, r *htt
 	h.recordAudit(ctx, "transaction.create", &tx.ID, "success")
 
 	observability.RecordTransactionCreated(tx.Type, tx.Status)
-	h.publishTransactionCreatedEvent(ctx, tx)
 
 	respondSuccess(w, http.StatusCreated, tx)
 }
@@ -191,8 +189,13 @@ func (h *transactionHandler) ListTransactions(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	limit, offset, ok := parseTransactionListPage(w, r)
+	if !ok {
+		return
+	}
+
 	ctx := r.Context()
-	txs, err := h.svc.ListTransactions(ctx, userID)
+	txs, err := h.svc.ListTransactions(ctx, userID, limit, offset)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -202,6 +205,8 @@ func (h *transactionHandler) ListTransactions(w http.ResponseWriter, r *http.Req
 		"status": "success",
 		"data":   txs,
 		"count":  len(txs),
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 
@@ -271,16 +276,6 @@ func (h *transactionHandler) DeleteTransaction(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (h *transactionHandler) publishTransactionCreatedEvent(ctx context.Context, tx *models.Transaction) {
-	if h.publisher == nil {
-		return
-	}
-
-	if err := h.publisher.PublishTransactionCreated(ctx, tx); err != nil {
-		log.Printf("kafka publish transaction.created failed: %v", err)
-	}
-}
-
 func (h *transactionHandler) recordAudit(ctx context.Context, action string, entityID *string, result string) {
 	if h.audit == nil {
 		return
@@ -319,4 +314,28 @@ func queryUserMatchesPrincipal(w http.ResponseWriter, r *http.Request, userID st
 	}
 	respondError(w, http.StatusForbidden, "user_id does not match authenticated principal")
 	return false
+}
+
+func parseTransactionListPage(w http.ResponseWriter, r *http.Request) (int, int, bool) {
+	limit := defaultTransactionListLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > maxTransactionListLimit {
+			respondError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+			return 0, 0, false
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			respondError(w, http.StatusBadRequest, "offset must be non-negative")
+			return 0, 0, false
+		}
+		offset = parsed
+	}
+
+	return limit, offset, true
 }

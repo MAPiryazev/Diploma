@@ -94,3 +94,49 @@ func (r *analyticsRepository) GetPercentile90(ctx context.Context, userID string
 
 	return p90, nil
 }
+
+func (r *analyticsRepository) GetStreamStats(ctx context.Context, userID string, from, to string) ([]StreamAnalyticsRow, error) {
+	const query = `
+		SELECT
+			stat_date::text,
+			currency,
+			created_count,
+			updated_count,
+			deleted_count,
+			status_changed_count,
+			created_amount::numeric(18,2)::text,
+			last_event_time::text
+		FROM transaction_event_stats
+		WHERE user_id = $1 AND stat_date >= $2::date AND stat_date <= $3::date
+		ORDER BY stat_date, currency
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, userID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stream stats: %w", err)
+	}
+	defer rows.Close()
+
+	stats := make([]StreamAnalyticsRow, 0)
+	for rows.Next() {
+		var row StreamAnalyticsRow
+		if err := rows.Scan(
+			&row.StatDate,
+			&row.Currency,
+			&row.CreatedCount,
+			&row.UpdatedCount,
+			&row.DeletedCount,
+			&row.StatusChangedCount,
+			&row.CreatedAmount,
+			&row.LastEventTime,
+		); err != nil {
+			return nil, fmt.Errorf("scan stream stats: %w", err)
+		}
+		stats = append(stats, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stream stats rows: %w", err)
+	}
+
+	return stats, nil
+}

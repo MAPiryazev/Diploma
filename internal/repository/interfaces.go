@@ -9,7 +9,7 @@ import (
 type TransactionRepository interface {
 	Create(ctx context.Context, tx *models.Transaction) (*models.Transaction, error)
 	GetByID(ctx context.Context, id, userID string) (*models.Transaction, error)
-	ListByUser(ctx context.Context, userID string) ([]*models.Transaction, error)
+	ListByUser(ctx context.Context, userID string, limit, offset int) ([]*models.Transaction, error)
 	Update(ctx context.Context, tx *models.Transaction) error
 	Delete(ctx context.Context, id, userID string) error
 }
@@ -44,6 +44,18 @@ type AnalyticsRepository interface {
 	GetCount(ctx context.Context, userID string, from, to string) (int64, error)
 	GetMedian(ctx context.Context, userID string, from, to string) (string, error)
 	GetPercentile90(ctx context.Context, userID string, from, to string) (string, error)
+	GetStreamStats(ctx context.Context, userID string, from, to string) ([]StreamAnalyticsRow, error)
+}
+
+type StreamAnalyticsRow struct {
+	StatDate           string `json:"stat_date"`
+	Currency           string `json:"currency"`
+	CreatedCount       int64  `json:"created_count"`
+	UpdatedCount       int64  `json:"updated_count"`
+	DeletedCount       int64  `json:"deleted_count"`
+	StatusChangedCount int64  `json:"status_changed_count"`
+	CreatedAmount      string `json:"created_amount"`
+	LastEventTime      string `json:"last_event_time"`
 }
 
 type IdempotencyRecord struct {

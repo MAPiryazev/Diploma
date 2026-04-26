@@ -2,6 +2,7 @@
   "annotations": {
     "list": []
   },
+  "description": "Kafka, outbox and consumer observability for the financial transaction streaming pipeline.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -11,181 +12,543 @@
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "msgps" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "eps", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "id": 1,
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum by (topic) (rate(kafka_producer_messages_sent_total[1m]))",
-          "legendFormat": "sent {{topic}}",
+          "expr": "sum(rate(kafka_producer_messages_sent_total{topic=~\"$topic\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "produced",
           "range": true,
           "refId": "A"
-        },
+        }
+      ],
+      "title": "Producer throughput",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "eps", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_messages_processed_total[1m]))",
+          "expr": "sum(rate(kafka_consumer_messages_processed_total{event_type=~\"$event_type\"}[$__rate_interval]))",
           "legendFormat": "processed",
           "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Kafka pipeline throughput",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "id": 2,
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "editorMode": "code",
-          "expr": "sum by (topic) (kafka_consumergroup_lag{consumergroup=\"diploma-transactions-consumer\"})",
-          "legendFormat": "{{topic}}",
-          "range": true,
           "refId": "A"
         }
       ],
-      "title": "Kafka consumer lag",
-      "type": "timeseries"
+      "title": "Consumer throughput",
+      "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "msgps" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "id": 3,
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_messages_invalid_total[1m]))",
-          "legendFormat": "invalid",
+          "expr": "sum(clamp_min(kafka_consumergroup_lag{topic=~\"$topic\", consumergroup=~\"$consumer_group\"}, 0))",
+          "legendFormat": "lag",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Consumer lag, messages",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(increase(kafka_consumer_dlq_published_total[5m]))",
+          "legendFormat": "DLQ in 5m",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "DLQ publishes, 5m",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "eps", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (event_type) (rate(outbox_events_published_total{event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "outbox published {{event_type}}",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_messages_duplicate_total[1m]))",
-          "legendFormat": "duplicate",
+          "expr": "sum by (topic, event_type) (rate(kafka_producer_messages_sent_total{topic=~\"$topic\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "producer sent {{topic}} {{event_type}}",
           "range": true,
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_handler_retries_total[1m]))",
-          "legendFormat": "retries",
+          "expr": "sum by (event_type) (rate(kafka_consumer_messages_processed_total{event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "consumer processed {{event_type}}",
           "range": true,
           "refId": "C"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_dlq_published_total[1m]))",
-          "legendFormat": "dlq published",
+          "expr": "sum by (event_type) (rate(transaction_projection_applied_total{event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "projection applied {{event_type}}",
           "range": true,
           "refId": "D"
         }
       ],
-      "title": "Consumer quality signals",
+      "title": "Pipeline throughput by stage",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "id": 4,
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(kafka_consumer_handle_duration_seconds_bucket[1m])))",
-          "legendFormat": "handle p95",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(kafka_consumer_event_processing_lag_seconds_bucket[1m])))",
-          "legendFormat": "event lag p95",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Consumer latency",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "events/sec" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-      "id": 5,
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "editorMode": "code",
-          "expr": "sum(rate(monitoring_large_amount_events_total[1m]))",
-          "legendFormat": "large amount",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Monitoring rule hits",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "errps" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "eps", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "id": 6,
-      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum by (topic) (rate(kafka_producer_errors_total[1m]))",
-          "legendFormat": "producer {{topic}}",
+          "expr": "sum by (topic) (rate(kafka_topic_partition_current_offset{topic=~\"$topic\"}[$__rate_interval]))",
+          "legendFormat": "topic append {{topic}}",
           "range": true,
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_commit_errors_total[1m]))",
-          "legendFormat": "commit",
+          "expr": "sum by (consumergroup, topic) (rate(kafka_consumergroup_current_offset{topic=~\"$topic\", consumergroup=~\"$consumer_group\"}[$__rate_interval]))",
+          "legendFormat": "committed {{consumergroup}} {{topic}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Kafka offsets movement",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (consumergroup, topic) (clamp_min(kafka_consumergroup_lag{topic=~\"$topic\", consumergroup=~\"$consumer_group\"}, 0))",
+          "legendFormat": "{{consumergroup}} {{topic}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "max by (consumergroup, topic) (clamp_min(kafka_consumergroup_lag{topic=~\"$topic\", consumergroup=~\"$consumer_group\"}, 0))",
+          "legendFormat": "max partition {{consumergroup}} {{topic}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Consumer group lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 8,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (consumergroup, topic, partition) (clamp_min(kafka_consumergroup_lag{topic=~\"$topic\", consumergroup=~\"$consumer_group\"}, 0))",
+          "legendFormat": "{{consumergroup}} {{topic}} p{{partition}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Consumer lag by partition",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "kafka_brokers",
+          "legendFormat": "brokers",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "kafka_topic_partitions{topic=~\"$topic\"}",
+          "legendFormat": "partitions {{topic}}",
           "range": true,
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(kafka_consumer_dlq_errors_total[1m]))",
-          "legendFormat": "dlq publish",
+          "expr": "max by (consumergroup) (kafka_consumergroup_members{consumergroup=~\"$consumer_group\"})",
+          "legendFormat": "members {{consumergroup}}",
           "range": true,
           "refId": "C"
         }
       ],
-      "title": "Pipeline errors",
+      "title": "Kafka topology and group members",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "eps", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (topic, event_type) (rate(kafka_producer_errors_total{topic=~\"$topic\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "producer error {{topic}} {{event_type}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (event_type) (rate(outbox_events_failed_total{event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "outbox failed {{event_type}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(kafka_consumer_messages_invalid_total[$__rate_interval]))",
+          "legendFormat": "consumer invalid",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(kafka_consumer_messages_duplicate_total[$__rate_interval]))",
+          "legendFormat": "consumer duplicate",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(kafka_consumer_handler_retries_total[$__rate_interval]))",
+          "legendFormat": "handler retry",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(kafka_consumer_commit_errors_total[$__rate_interval]))",
+          "legendFormat": "commit error",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(kafka_consumer_dlq_errors_total[$__rate_interval]))",
+          "legendFormat": "DLQ publish error",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(kafka_consumer_dlq_published_total[$__rate_interval]))",
+          "legendFormat": "DLQ published",
+          "range": true,
+          "refId": "H"
+        }
+      ],
+      "title": "Errors, retries and DLQ",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "clamp_max(100 * sum(rate(kafka_producer_errors_total{topic=~\"$topic\", event_type=~\"$event_type\"}[$__rate_interval])) / clamp_min(sum(rate(kafka_producer_messages_sent_total{topic=~\"$topic\", event_type=~\"$event_type\"}[$__rate_interval])) + sum(rate(kafka_producer_errors_total{topic=~\"$topic\", event_type=~\"$event_type\"}[$__rate_interval])), 0.001), 100)",
+          "legendFormat": "producer",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "clamp_max(100 * sum(rate(outbox_events_failed_total{event_type=~\"$event_type\"}[$__rate_interval])) / clamp_min(sum(rate(outbox_events_published_total{event_type=~\"$event_type\"}[$__rate_interval])) + sum(rate(outbox_events_failed_total{event_type=~\"$event_type\"}[$__rate_interval])), 0.001), 100)",
+          "legendFormat": "outbox",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "clamp_max(100 * (sum(rate(kafka_consumer_messages_invalid_total[$__rate_interval])) + sum(rate(kafka_consumer_dlq_published_total[$__rate_interval]))) / clamp_min(sum(rate(kafka_consumer_messages_processed_total{event_type=~\"$event_type\"}[$__rate_interval])) + sum(rate(kafka_consumer_messages_invalid_total[$__rate_interval])) + sum(rate(kafka_consumer_dlq_published_total[$__rate_interval])), 0.001), 100)",
+          "legendFormat": "consumer rejected or DLQ",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Pipeline error ratios",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0, "custom": { "axisSoftMin": 0, "axisSoftMax": 0.25 } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(kafka_consumer_handle_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kafka_consumer_handle_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(kafka_consumer_handle_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Consumer handler latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0, "custom": { "axisSoftMin": 0, "axisSoftMax": 1 } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(kafka_consumer_kafka_processing_lag_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(kafka_consumer_kafka_processing_lag_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(kafka_consumer_kafka_processing_lag_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Kafka append to processed lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "id": 14,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le, event_type) (rate(outbox_publish_duration_seconds_bucket{event_type=~\"$event_type\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{event_type}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, event_type) (rate(outbox_publish_duration_seconds_bucket{event_type=~\"$event_type\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{event_type}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, event_type) (rate(outbox_publish_duration_seconds_bucket{event_type=~\"$event_type\"}[$__rate_interval])))",
+          "legendFormat": "p99 {{event_type}}",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Outbox publish latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "eps", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 52 },
+      "id": 15,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (event_type) (rate(transaction_projection_applied_total{event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "projection {{event_type}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum(rate(monitoring_large_amount_events_total[$__rate_interval]))",
+          "legendFormat": "large amount signal",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "sum by (type, status) (rate(transactions_created_total[$__rate_interval]))",
+          "legendFormat": "api created {{type}} {{status}}",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Business stream signals",
       "type": "timeseries"
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["diploma", "kafka", "monitoring"],
+  "tags": ["diploma", "kafka", "streaming", "monitoring"],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kafka_topic_partition_current_offset, topic)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Kafka topic",
+        "multi": true,
+        "name": "topic",
+        "options": [],
+        "query": "label_values(kafka_topic_partition_current_offset, topic)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kafka_consumergroup_lag{topic=~\"$topic\"}, consumergroup)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Consumer group",
+        "multi": true,
+        "name": "consumer_group",
+        "options": [],
+        "query": "label_values(kafka_consumergroup_lag{topic=~\"$topic\"}, consumergroup)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(kafka_consumer_messages_processed_total, event_type)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Event type",
+        "multi": true,
+        "name": "event_type",
+        "options": [],
+        "query": "label_values(kafka_consumer_messages_processed_total, event_type)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-30m",
@@ -195,6 +558,6 @@
   "timezone": "browser",
   "title": "Diploma Kafka Pipeline",
   "uid": "diploma-kafka-pipeline",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }
