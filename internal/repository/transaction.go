@@ -9,26 +9,41 @@ import (
 	"time"
 
 	apperrors "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/errors"
-	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/events"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
 	"github.com/wb-go/wbf/dbpg"
 )
 
 type transactionRepository struct {
-	db    *dbpg.DB
-	topic string
+	db      *dbpg.DB
+	topic   string
+	builder TransactionEventBuilder
 }
 
 type transactionScanner interface {
 	Scan(dest ...any) error
 }
 
-func NewTransactionRepository(db *dbpg.DB, topic ...string) TransactionRepository {
-	kafkaTopic := events.DefaultTransactionsTopic
+type OutboxMessage struct {
+	EventID     string
+	AggregateID string
+	EventType   string
+	MessageKey  string
+	Payload     []byte
+}
+
+type TransactionEventBuilder interface {
+	BuildCreated(tx *models.Transaction) ([]OutboxMessage, error)
+	BuildUpdated(before, after *models.Transaction) ([]OutboxMessage, error)
+	BuildDeleted(tx *models.Transaction) ([]OutboxMessage, error)
+}
+
+func NewTransactionRepository(db *dbpg.DB, builder TransactionEventBuilder, topic ...string) TransactionRepository {
+	kafkaTopic := transactionevents.DefaultTransactionsTopic
 	if len(topic) > 0 && strings.TrimSpace(topic[0]) != "" {
 		kafkaTopic = strings.TrimSpace(topic[0])
 	}
-	return &transactionRepository{db: db, topic: kafkaTopic}
+	return &transactionRepository{db: db, topic: kafkaTopic, builder: builder}
 }
 
 func (r *transactionRepository) Create(ctx context.Context, tx *models.Transaction) (*models.Transaction, error) {
@@ -66,15 +81,11 @@ func (r *transactionRepository) Create(ctx context.Context, tx *models.Transacti
 	tx.CreatedAt = createdAt
 	tx.UpdatedAt = updatedAt
 
-	env, err := events.NewTransactionCreatedEnvelope(tx, time.Now().UTC())
+	messages, err := r.builder.BuildCreated(tx)
 	if err != nil {
 		return nil, fmt.Errorf("build transaction.created outbox event: %w", err)
 	}
-	payload, err := events.MarshalTransactionEventEnvelope(env)
-	if err != nil {
-		return nil, fmt.Errorf("marshal transaction.created outbox event: %w", err)
-	}
-	if err := r.insertOutboxEvent(ctx, dbTx, env, tx.UserID, payload); err != nil {
+	if err := r.insertOutboxEvents(ctx, dbTx, messages); err != nil {
 		return nil, err
 	}
 
@@ -187,30 +198,12 @@ func (r *transactionRepository) Update(ctx context.Context, tx *models.Transacti
 		return fmt.Errorf("failed to update transaction: %w", err)
 	}
 
-	env, err := events.NewTransactionUpdatedEnvelope(before, after, time.Now().UTC())
+	messages, err := r.builder.BuildUpdated(before, after)
 	if err != nil {
-		return fmt.Errorf("build transaction.updated outbox event: %w", err)
+		return fmt.Errorf("build transaction update outbox events: %w", err)
 	}
-	payload, err := events.MarshalTransactionEventEnvelope(env)
-	if err != nil {
-		return fmt.Errorf("marshal transaction.updated outbox event: %w", err)
-	}
-	if err := r.insertOutboxEvent(ctx, dbTx, env, after.UserID, payload); err != nil {
+	if err := r.insertOutboxEvents(ctx, dbTx, messages); err != nil {
 		return err
-	}
-
-	if before.Status != after.Status {
-		statusEnv, err := events.NewTransactionStatusChangedEnvelope(before, after, time.Now().UTC())
-		if err != nil {
-			return fmt.Errorf("build transaction.status_changed outbox event: %w", err)
-		}
-		statusPayload, err := events.MarshalTransactionEventEnvelope(statusEnv)
-		if err != nil {
-			return fmt.Errorf("marshal transaction.status_changed outbox event: %w", err)
-		}
-		if err := r.insertOutboxEvent(ctx, dbTx, statusEnv, after.UserID, statusPayload); err != nil {
-			return err
-		}
 	}
 
 	if err := dbTx.Commit(); err != nil {
@@ -246,15 +239,11 @@ func (r *transactionRepository) Delete(ctx context.Context, id, userID string) e
 		return fmt.Errorf("failed to delete transaction: %w", err)
 	}
 
-	env, err := events.NewTransactionDeletedEnvelope(tx, time.Now().UTC())
+	messages, err := r.builder.BuildDeleted(tx)
 	if err != nil {
 		return fmt.Errorf("build transaction.deleted outbox event: %w", err)
 	}
-	payload, err := events.MarshalTransactionEventEnvelope(env)
-	if err != nil {
-		return fmt.Errorf("marshal transaction.deleted outbox event: %w", err)
-	}
-	if err := r.insertOutboxEvent(ctx, dbTx, env, tx.UserID, payload); err != nil {
+	if err := r.insertOutboxEvents(ctx, dbTx, messages); err != nil {
 		return err
 	}
 
@@ -283,28 +272,28 @@ func (r *transactionRepository) getByIDForUpdate(ctx context.Context, tx *sql.Tx
 	return model, nil
 }
 
-func (r *transactionRepository) insertOutboxEvent(
+func (r *transactionRepository) insertOutboxEvents(
 	ctx context.Context,
 	tx *sql.Tx,
-	env *events.TransactionEventEnvelope,
-	messageKey string,
-	payload []byte,
+	messages []OutboxMessage,
 ) error {
 	const outboxQuery = `
 		INSERT INTO event_outbox (event_id, aggregate_id, event_type, topic, message_key, payload)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`
-	if _, err := tx.ExecContext(
-		ctx,
-		outboxQuery,
-		env.EventID,
-		env.AggregateID,
-		env.EventType,
-		r.topic,
-		messageKey,
-		string(payload),
-	); err != nil {
-		return fmt.Errorf("failed to create outbox event: %w", err)
+	for _, message := range messages {
+		if _, err := tx.ExecContext(
+			ctx,
+			outboxQuery,
+			message.EventID,
+			message.AggregateID,
+			message.EventType,
+			r.topic,
+			message.MessageKey,
+			string(message.Payload),
+		); err != nil {
+			return fmt.Errorf("failed to create outbox event: %w", err)
+		}
 	}
 	return nil
 }

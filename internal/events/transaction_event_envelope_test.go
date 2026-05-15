@@ -1,20 +1,19 @@
 package events
 
 import (
+	transactionevents "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 )
 
 func TestNewTransactionStatusChangedEnvelope_SetsStatusesAndCorrelation(t *testing.T) {
-	before := &models.Transaction{ID: "tx-1", UserID: "user-1", Status: "pending"}
-	after := &models.Transaction{ID: "tx-1", UserID: "user-1", Status: "done"}
+	before := &transactionevents.TransactionPayload{ID: "tx-1", UserID: "user-1", Status: "pending"}
+	after := &transactionevents.TransactionPayload{ID: "tx-1", UserID: "user-1", Status: "done"}
 
-	env, err := NewTransactionStatusChangedEnvelope(before, after, time.Time{})
+	env, err := transactionevents.NewStatusChanged(before, after, time.Time{})
 	if err != nil {
-		t.Fatalf("NewTransactionStatusChangedEnvelope() error = %v", err)
+		t.Fatalf("NewStatusChanged() error = %v", err)
 	}
 
 	if env.EventType != EventTypeStatusChanged {
@@ -96,14 +95,14 @@ func TestUserIDKeyFromTransactionEventFallsBackToAfterAndBefore(t *testing.T) {
 		{
 			name: "after fallback",
 			env: &TransactionEventEnvelope{
-				After: &models.Transaction{ID: "tx-1", UserID: "user-after"},
+				After: &transactionevents.TransactionPayload{ID: "tx-1", UserID: "user-after"},
 			},
 			want: "user-after",
 		},
 		{
 			name: "before fallback",
 			env: &TransactionEventEnvelope{
-				Before: &models.Transaction{ID: "tx-1", UserID: "user-before"},
+				Before: &transactionevents.TransactionPayload{ID: "tx-1", UserID: "user-before"},
 			},
 			want: "user-before",
 		},

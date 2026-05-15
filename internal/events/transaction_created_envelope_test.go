@@ -1,14 +1,13 @@
 package events
 
 import (
+	transactionevents "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
 	"testing"
 	"time"
-
-	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 )
 
 func TestTransactionCreatedEnvelope_Validate_ok(t *testing.T) {
-	tx := &models.Transaction{ID: "e1", UserID: "u1"}
+	tx := &transactionevents.TransactionPayload{ID: "e1", UserID: "u1"}
 	env := TransactionCreatedEnvelope{
 		EventID:       "e1",
 		EventType:     EventTypeTransactionCreated,
@@ -25,7 +24,7 @@ func TestTransactionCreatedEnvelope_Validate_ok(t *testing.T) {
 }
 
 func TestTransactionCreatedEnvelope_Validate_mismatchedIDs(t *testing.T) {
-	tx := &models.Transaction{ID: "x", UserID: "u1"}
+	tx := &transactionevents.TransactionPayload{ID: "x", UserID: "u1"}
 	env := TransactionCreatedEnvelope{
 		EventID:       "e1",
 		EventType:     EventTypeTransactionCreated,

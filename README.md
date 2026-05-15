@@ -1,123 +1,132 @@
-# Сервис потоковой обработки финансовых транзакций
+# Микросервисная система потоковой обработки финансовых транзакций
 
-## Обзор проекта
-Проект представляет собой учебный сервис для работы с финансовыми транзакциями пользователей. Базовые данные и основная бизнес-логика находятся в PostgreSQL, а Kafka используется как шина событий для асинхронной обработки факта создания транзакции.
+Учебный проект для темы:
 
-Сервис поддерживает:
+`проектирование и разработка микросервисной системы потоковой обработки финансовых транзакций`
 
-- HTTP API для CRUD-операций по транзакциям.
-- Web UI из каталога `web/`.
-- Аналитику по транзакциям за период.
-- Идемпотентность для `POST /items` через заголовок `Idempotency-Key`.
-- Bearer-token аутентификацию пользовательских маршрутов.
-- Audit log для операций создания, изменения и удаления транзакций.
-- Простое правило мониторинга крупных операций.
-- Kafka producer на стороне API.
-- Kafka consumer с дедупликацией, retry, DLQ и replay.
-- Метрики Prometheus и дашборды Grafana.
-- Легкую нагрузку для демонстрации графиков и активности системы.
+Система строится вокруг write-side API, transactional outbox, Kafka и независимых read-side subscribers. Цель проекта не в количестве контейнеров, а в понятных service boundaries, CQRS-подобном разделении контуров и production-like event-driven flow.
+
+## Что реализовано
+
+- `transaction-api` принимает write-запросы, валидирует их, пишет транзакции в `ledger` DB, ведет audit log и сохраняет integration events в `event_outbox`.
+- `outbox-relay` публикует события из transactional outbox в Kafka.
+- `projection-builder` независимо читает `transactions.events`, строит read-model `analytics_transactions` и потоковую projection-таблицу `transaction_event_stats`.
+- `risk-evaluation` независимо читает тот же поток и фиксирует risk / monitoring events в `monitoring_events`.
+- `analytics-query` читает только `analytics` DB и не обращается к write-side таблице `transactions`.
+- `dlqreplay` служит ops-инструментом для повторной публикации payload из DLQ в основной topic.
+- `Prometheus`, `Grafana` и `kafka-exporter` показывают health, metrics и lag consumer groups.
 
 ## Архитектура
-Проект состоит из нескольких компонентов:
 
-- `app` — основной HTTP-сервис на Go.
-- `consumer` — отдельный воркер, читающий события из Kafka.
-- `PostgreSQL` — основное хранилище данных.
-- `Kafka` — брокер событий.
-- `kafka-init` — одноразовый контейнер, создающий Kafka topics.
-- `Prometheus` — сбор метрик.
-- `Grafana` — визуализация метрик и lag.
-- `kafka-exporter` — экспорт lag и offsets из Kafka.
+### Runtime topology
 
-Поток данных выглядит так:
+- `transaction-api` - write-side owner транзакций и outbox intent.
+- `outbox-relay` - технический publisher из `event_outbox` в Kafka.
+- `projection-builder` - read-model builder для analytics-side.
+- `risk-evaluation` - независимый subscriber для правил мониторинга.
+- `analytics-query` - query-side HTTP service.
+- `postgres` - один PostgreSQL instance с двумя logical databases:
+  - `salestracker_ledger`
+  - `salestracker_analytics`
+- `kafka` - event backbone.
 
-1. Клиент создает, обновляет или удаляет транзакцию через `/items`.
-2. API валидирует запрос и в одной PostgreSQL-транзакции записывает бизнес-изменение и outbox-событие.
-3. Фоновый outbox relay публикует `transaction.*` в Kafka и помечает событие отправленным.
-4. Consumer читает событие, валидирует envelope, проверяет дедупликацию и фиксирует обработку.
-5. Consumer обновляет streaming projection `transaction_event_stats` и сохраняет monitoring events.
-6. При ошибках сообщение может попасть в DLQ.
-7. Метрики producer, consumer и lag доступны в Prometheus и Grafana.
+### Event flow
+
+```mermaid
+flowchart LR
+    client[ClientOrWebUI] --> transactionApi[transaction-api]
+    transactionApi --> ledgerDb[ledgerDb]
+    transactionApi --> outbox[event_outbox]
+    outbox --> relay[outbox-relay]
+    relay --> kafka[Kafka]
+    kafka --> projectionBuilder[projection-builder]
+    kafka --> riskEvaluation[risk-evaluation]
+    projectionBuilder --> analyticsDb[analyticsDb]
+    riskEvaluation --> analyticsDb
+    analyticsQuery[analytics-query] --> analyticsDb
+```
+
+### Почему это уже похоже на microservice architecture
+
+- write-side и read-side разделены на уровне ownership и доступа к данным;
+- integration event contract отделен от внутренних persistence-моделей;
+- read-side split на два независимых subscribers, а не на один «комбайн»;
+- дедупликация стала `subscriber-aware`: одно и то же событие может быть обработано разными сервисами независимо;
+- query-сервис больше не зависит от write-side таблиц.
 
 ## Структура проекта
 
-- `cmd/server` — точка входа HTTP API.
-- `cmd/consumer` — Kafka consumer.
-- `cmd/dlqreplay` — replay сообщений из DLQ обратно в основной topic.
-- `cmd/load` — генератор легкой нагрузки на API.
-- `internal/config` — загрузка конфигурации.
-- `internal/db` — подключение к БД и миграции.
-- `internal/events` — producer, DLQ, replay, контракт события.
-- `internal/handlers` — HTTP-обработчики.
-- `internal/service` — бизнес-логика.
-- `internal/repository` — доступ к PostgreSQL.
-- `internal/observability` — Prometheus-метрики.
-- `migrations` — SQL-миграции и тестовые данные.
-- `grafana` — provisioning и дашборды Grafana.
-- `web` — статический клиент.
+- `cmd/server` - `transaction-api`
+- `cmd/analytics` - `analytics-query`
+- `cmd/relay` - `outbox-relay`
+- `cmd/projectionbuilder` - `projection-builder`
+- `cmd/riskevaluation` - `risk-evaluation`
+- `cmd/dlqreplay` - replay из DLQ
+- `cmd/load` - генератор demo-нагрузки
+- `internal/services/transactionapi` - service-owned write-side slice
+- `internal/services/analytics` - service-owned query-side slice
+- `internal/services/outboxrelay` - runtime `outbox-relay`
+- `internal/services/projectionbuilder` - runtime `projection-builder`
+- `internal/services/riskevaluation` - runtime `risk-evaluation`
+- `internal/services/processing/store` - PostgreSQL adapters для analytics-side projections
+- `internal/services/processing/subscriber` - общий runtime loop для Kafka subscribers
+- `internal/services/transactionapi/integrationevents` - event builder между write model и wire contract
+- `internal/shared/contracts/transactionevents` - стабильный integration contract событий
+- `migrations/ledger` - write-side schema
+- `migrations/analytics` - read-side schema
 
-## Основные возможности
+Legacy-пакеты `internal/bootstrap`, `internal/handlers`, `internal/service` и устаревшие root migrations удалены, чтобы репозиторий отражал только живую архитектуру.
 
-### HTTP API
-Сервис поднимает следующие маршруты:
+## Сервисы и endpoints
 
-- `GET /` — статический Web UI.
-- `GET /health` — liveness check.
-- `GET /ready` — readiness check с проверкой подключения к БД.
-- `GET /metrics` — метрики Prometheus для API.
-- `POST /items` — создание транзакции.
-- `GET /items` — список транзакций пользователя.
-- `GET /items/{id}` — получение транзакции по id.
-- `PUT /items/{id}` — обновление транзакции.
-- `DELETE /items/{id}` — мягкое удаление транзакции.
-- `GET /analytics` — аналитика за период.
-- `GET /analytics/stream` — статистика, построенная consumer-ом из Kafka events.
+### `transaction-api`
 
-Пользовательские маршруты требуют заголовок:
+- `GET /`
+- `GET /health`
+- `GET /ready`
+- `GET /metrics`
+- `POST /items`
+- `GET /items`
+- `GET /items/{id}`
+- `PUT /items/{id}`
+- `DELETE /items/{id}`
+
+### `analytics-query`
+
+- `GET /health`
+- `GET /ready`
+- `GET /metrics`
+- `GET /analytics`
+- `GET /analytics/stream`
+
+### Subscriber services
+
+- `projection-builder`
+  - `GET /health`
+  - `GET /ready`
+  - `GET /metrics`
+- `risk-evaluation`
+  - `GET /health`
+  - `GET /ready`
+  - `GET /metrics`
+- `outbox-relay`
+  - `GET /health`
+  - `GET /ready`
+  - `GET /metrics`
+
+### Demo auth
+
+Пользовательские маршруты требуют:
 
 ```http
 Authorization: Bearer dev-token
 ```
 
-В demo-конфигурации `dev-token` привязан к пользователю `11111111-1111-1111-1111-111111111111`. Если клиент передаст другой `user_id` в body или query, API вернет `403 Forbidden`.
+В demo-конфигурации токен привязан к пользователю `11111111-1111-1111-1111-111111111111`.
 
-### Безопасность и аудит
-В учебном контуре реализованы базовые меры защиты:
+## Kafka contract
 
-- Bearer-token аутентификация пользовательских маршрутов.
-- Проверка, что `from_account_id` и `to_account_id` принадлежат текущему пользователю.
-- Audit log для `create`, `update`, `delete` транзакций в таблице `audit_logs`.
-- Маскирование чувствительных идентификаторов в consumer-логах.
-- Настраиваемый `POSTGRES_SSLMODE` для подключения к PostgreSQL.
-
-### Идемпотентность `POST /items`
-Если клиент передает заголовок `Idempotency-Key`, сервис:
-
-- вычисляет хеш тела запроса;
-- проверяет, был ли уже такой ключ для данного пользователя;
-- при совпадении тела возвращает сохраненный ответ повторно;
-- при конфликте тела возвращает `409 Conflict`.
-
-Идемпотентность хранится в таблице `idempotency_keys`.
-
-### Kafka
-Kafka в проекте используется как событийная шина вокруг жизненного цикла транзакции.
-
-Что уже реализовано:
-
-- API сохраняет `transaction.created`, `transaction.updated`, `transaction.deleted` и `transaction.status_changed` в transactional outbox.
-- Outbox relay асинхронно публикует готовые события в Kafka.
-- Consumer читает события из topic `transactions.events`.
-- Consumer валидирует JSON-envelope.
-- Дедупликация идет по `event_id` через таблицу `processed_events`.
-- Крупные операции фиксируются как monitoring events в таблице `monitoring_events`.
-- Потоковая статистика обновляется consumer-ом в таблице `transaction_event_stats`.
-- Для ошибок обработки используется topic `transactions.events.dlq`.
-- Есть утилита replay из DLQ в основной topic.
-- Добавлены retry перед отправкой в DLQ.
-
-## Контракт события Kafka
-События транзакций имеют общий JSON-envelope:
+Все lifecycle events транзакций используют один JSON envelope:
 
 ```json
 {
@@ -149,201 +158,146 @@ Kafka в проекте используется как событийная ш�
 }
 ```
 
-Для `transaction.updated` и `transaction.status_changed` дополнительно передаются `before` и `after`; для `transaction.status_changed` также есть `old_status` и `new_status`. Для `transaction.deleted` передается удаленная транзакция с заполненным `deleted_at`.
+Для `transaction.updated` и `transaction.status_changed` дополнительно передаются `before` и `after`. Для `transaction.status_changed` также передаются `old_status` и `new_status`.
 
-Consumer проверяет:
+Контракт хранится в `internal/shared/contracts/transactionevents` и теперь не зависит от `internal/models`.
 
-- `event_id` не пустой;
-- `event_type` входит в поддержанный набор `transaction.created`, `transaction.updated`, `transaction.deleted`, `transaction.status_changed`;
-- `schema_version == 1`;
-- `aggregate_id` не пустой;
-- payload события относится к тому же `aggregate_id`.
+## Данные и ownership
 
-## Правила валидации транзакций
+### `ledger` DB
 
-### Допустимые значения
+Используется только write-side сервисами:
 
-- `type`: `income`, `expense`, `transfer`
-- `status`: `pending`, `done`, `failed`
+- `transaction-api`
+- `outbox-relay`
 
-### Базовые правила
+Основные таблицы:
 
-- Для `income` должен быть указан `to_account_id`.
-- Для `expense` должен быть указан `from_account_id`.
-- Для `transfer` должны быть указаны оба счета.
-- Для `transfer` `from_account_id` и `to_account_id` должны отличаться.
-- `amount` должен быть положительным числом.
-- `currency` должна быть валидной валютой.
-- `occurred_at` должен быть корректным RFC3339 timestamp.
-- `category_id`, `provider_id`, `user_id`, `account_id` должны быть валидными UUID.
+- `transactions`
+- `idempotency_keys`
+- `audit_logs`
+- `event_outbox`
 
-## Аналитика
-Маршрут `GET /analytics` принимает query-параметры:
+### `analytics` DB
 
-- `user_id`
-- `from`
-- `to`
+Используется только read-side и async subscribers:
 
-В ответе возвращаются:
+- `analytics-query`
+- `projection-builder`
+- `risk-evaluation`
 
-- `sum`
-- `avg`
-- `count`
-- `median`
-- `percentile_90`
+Основные таблицы:
 
-Пример запроса:
+- `analytics_transactions`
+- `transaction_event_stats`
+- `monitoring_events`
+- `processed_events`
 
-```bash
-curl "http://localhost:8081/analytics?user_id=11111111-1111-1111-1111-111111111111&from=2026-03-01T00:00:00Z&to=2026-03-31T23:59:59Z"
-```
-
-## Тестовые данные
-В `migrations/002_init_data.sql` есть сиды для пользователей, счетов, категорий и провайдеров.
-
-Самый удобный набор для ручных запросов:
-
-- `user_id`: `11111111-1111-1111-1111-111111111111`
-- `from_account_id`: `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`
-- `category_id`: `44444444-4444-4444-4444-444444444444`
-- `provider_id`: `77777777-7777-7777-7777-777777777777`
-
-Именно эти значения использует утилита нагрузки `cmd/load`.
+Таблица `processed_events` хранит дедупликацию в виде `(subscriber_name, event_id)`, поэтому `projection-builder` и `risk-evaluation` могут независимо обрабатывать один и тот же event.
 
 ## Конфигурация
-Базовая несекретная конфигурация хранится в `config.yaml`. Локальные секреты и переопределения задаются через `.env` / `environment/.env`, а шаблоны лежат в `.env.example`, `environment/.env.example` и `config.example.yaml`.
 
-Приоритет значений:
+Базовые defaults лежат в `config.yaml`, локальные переопределения - в `environment/.env`.
 
-1. значения по умолчанию в коде;
-2. `config.yaml`;
-3. `.env` / `environment/.env`;
-4. реальные переменные окружения процесса или Docker Compose.
+Ключевые переменные:
 
-Ключевые параметры:
-
-- `POSTGRES_HOST`
-- `POSTGRES_PORT`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `POSTGRES_NAME`
-- `POSTGRES_SSLMODE`
-- `SERVER_PORT`
-- `SERVER_READ_TIMEOUT`
-- `SERVER_WRITE_TIMEOUT`
-- `APP_ENV`
-- `APP_LOG_LEVEL`
+- `LEDGER_DB_*`
+- `ANALYTICS_DB_*`
 - `KAFKA_BROKERS`
 - `KAFKA_TOPIC`
 - `KAFKA_DLQ_TOPIC`
 - `KAFKA_CONSUMER_GROUP_ID`
 - `CONSUMER_METRICS_PORT`
-- `SECURITY_AUTH_TOKENS`
 - `MONITORING_LARGE_AMOUNT_THRESHOLD`
-- `APP_HTTP_PORT`
-- `PROMETHEUS_PORT`
-- `GRAFANA_PORT`
-- `KAFKA_EXTERNAL_PORT`
-- `KAFKA_EXPORTER_PORT`
+- `SECURITY_AUTH_TOKENS`
 
-## Миграции
-Миграции лежат в `migrations/` и выполняются автоматически при старте API.
-
-Текущие миграции:
-
-- `000_extensions.sql` — включает `pgcrypto`.
-- `001_init_schema.sql` — базовая схема.
-- `002_init_data.sql` — сиды.
-- `003_idempotency.sql` — таблица идемпотентности.
-- `004_consumer_step4.sql` — таблица `processed_events`.
-- `005_audit_logs.sql` — таблица аудита действий с транзакциями.
-- `006_monitoring_events.sql` — события мониторинга по правилам.
-
-Важно:
-
-- миграции выполняет только `app`;
-- `consumer` миграции не запускает;
-- в `RunMigrations` используется advisory lock, чтобы исключить гонку между процессами.
+Для обратной совместимости код по-прежнему понимает `POSTGRES_*` как fallback для ledger-side, но рекомендуемый способ настройки - через `LEDGER_DB_*` и `ANALYTICS_DB_*`.
 
 ## Запуск
 
-### Рекомендуемый запуск: полный стек через Docker Compose
-Из корня проекта:
+### Полный demo-стек
 
 ```bash
-make docker-up
+make compose-up
 ```
 
-Эта команда поднимает:
+Поднимаются:
 
-- PostgreSQL
-- Kafka
-- kafka-init
-- app
-- consumer
-- Prometheus
-- Grafana
-- kafka-exporter
+- `postgres`
+- `kafka`
+- `kafka-init`
+- `transaction-api`
+- `analytics-query`
+- `outbox-relay`
+- `projection-builder`
+- `risk-evaluation`
+- `prometheus`
+- `grafana`
+- `kafka-exporter`
 
-После старта сервисы обычно доступны по следующим адресам:
+### Только core stack без observability
 
-- API / Web UI: `http://localhost:8081`
-- Health: `http://localhost:8081/health`
-- Ready: `http://localhost:8081/ready`
-- API metrics: `http://localhost:8081/metrics`
-- Consumer metrics: `http://localhost:2112/metrics`
+```bash
+make compose-up-core
+```
+
+### Сброс и чистый старт
+
+```bash
+make compose-down-v
+make compose-up
+```
+
+### Локальный запуск отдельных процессов
+
+```bash
+make run
+make run-analytics
+make run-relay
+make run-projectionbuilder
+make run-riskevaluation
+```
+
+Если стек уже поднят через Compose, локально запускать эти же сервисы обычно не нужно: порты уже заняты контейнерами.
+
+## Полезные команды Makefile
+
+- `make compose-config` - провалидировать topology
+- `make compose-up-core` - поднять core stack
+- `make compose-up` - поднять полный demo stack с observability profile
+- `make compose-stop` - остановить контейнеры
+- `make compose-down-v` - остановить контейнеры и удалить volumes
+- `make compose-logs SERVICE=projection-builder` - посмотреть логи сервиса
+- `make verify` - `go test ./...` + сборка ключевых бинарников + `docker compose config`
+- `make load-demo`
+- `make load-stress`
+- `make load-events`
+- `make load-errors`
+- `make dlq-replay ARGS='-limit 5'`
+
+## Адреса после старта
+
+- Web UI / API: `http://localhost:8081`
+- Analytics query: `http://localhost:8082`
+- Outbox relay: `http://localhost:8083`
+- Projection builder metrics / health: `http://localhost:2112`
+- Risk evaluation metrics / health: `http://localhost:2113`
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`
 - Kafka exporter: `http://localhost:9308/metrics`
 - Kafka с хоста: `localhost:9094`
 - PostgreSQL с хоста: `localhost:28436`
 
-### Полный сброс и чистый старт
-Если нужно начать с нуля и удалить volumes:
-
-```bash
-make docker-down-v
-make docker-up
-```
-
-### Локальный запуск без Docker Compose
-Можно запускать отдельные процессы локально:
-
-```bash
-make run
-make run-consumer
-```
-
-Но это не основной сценарий. Для локального запуска зависимости должны быть доступны отдельно по значениям из `.env`.
-
-Если уже поднят стек через `make docker-up`, отдельно запускать `make run-consumer` обычно не нужно: порт `2112` уже занят контейнером `consumer`.
-
-## Команды Makefile
-
-- `make docker-up` — поднять весь стек.
-- `make docker-stop` — остановить контейнеры.
-- `make docker-down-v` — остановить контейнеры и удалить volumes.
-- `make run` — локальный запуск API.
-- `make run-consumer` — локальный запуск consumer.
-- `make dlq-replay ARGS='-limit 5'` — replay сообщений из DLQ.
-- `make load` — легкая нагрузка на API.
-
-Примеры:
-
-```bash
-make load
-make load LOAD_DURATION=45s LOAD_QPS=8 LOAD_WORKERS=4
-make dlq-replay ARGS='-dry-run -limit 5'
-make dlq-replay ARGS='-limit 5'
-```
-
-## Примеры запросов к API
+## Примеры запросов
 
 ### Health
 
 ```bash
 curl -s http://localhost:8081/health
-curl -s http://localhost:8081/ready
+curl -s http://localhost:8082/ready
+curl -s http://localhost:8083/ready
+curl -s http://localhost:2112/ready
+curl -s http://localhost:2113/ready
 ```
 
 ### Создание транзакции
@@ -389,262 +343,83 @@ curl -X POST http://localhost:8081/items \
   }'
 ```
 
-Повтор с тем же телом и тем же `Idempotency-Key` должен вернуть сохраненный результат, а не создать новую транзакцию.
-
-### Список транзакций
+### Analytics query
 
 ```bash
-curl "http://localhost:8081/items?user_id=11111111-1111-1111-1111-111111111111"
+curl -H "Authorization: Bearer dev-token" \
+  "http://localhost:8082/analytics?user_id=11111111-1111-1111-1111-111111111111&from=2026-03-01T00:00:00Z&to=2026-03-31T23:59:59Z"
 ```
 
-### Получить транзакцию по id
+## Тестовые данные
 
-```bash
-curl "http://localhost:8081/items/<tx_id>?user_id=11111111-1111-1111-1111-111111111111"
-```
+Сиды лежат в `migrations/ledger/002_init_data.sql`.
 
-## Нагрузка и демонстрация метрик
+Удобные demo-значения:
 
-Для демонстрации Prometheus / Grafana:
+- `user_id`: `11111111-1111-1111-1111-111111111111`
+- `from_account_id`: `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`
+- `category_id`: `44444444-4444-4444-4444-444444444444`
+- `provider_id`: `77777777-7777-7777-7777-777777777777`
 
-```bash
-make load
-```
+## Наблюдаемость
 
-Или с параметрами:
+Prometheus скрейпит:
 
-```bash
-make load LOAD_DURATION=60s LOAD_QPS=10 LOAD_WORKERS=6
-```
-
-Что делает `make load`:
-
-- проверяет `GET /health`;
-- шлет валидные `POST /items` на API;
-- передает demo-токен `Authorization: Bearer dev-token` по умолчанию;
-- использует сиды из `002_init_data.sql`;
-- генерирует уникальные `external_id`;
-- печатает итог `ok` / `errors`.
-
-Если после `make load` сервис не упал, а в конце видно `errors=0`, значит базовый smoke/load-сценарий прошел успешно.
-
-## Kafka и consumer: как это работает
-
-### Producer
-После успешного изменения транзакции API публикует событие в Kafka через transactional outbox.
-
-Это происходит после записи в PostgreSQL, поэтому Kafka здесь не заменяет БД, а фиксирует поток совершившихся доменных изменений.
-
-### Consumer
-Consumer:
-
-- читает `transactions.events`;
-- валидирует envelope;
-- сохраняет `event_id` в `processed_events`, чтобы исключить повторную обработку;
-- выбирает обработчик по `event_type`;
-- обновляет projection `transaction_event_stats`;
-- делает retry с backoff при ошибке handler;
-- при окончательной неудаче пишет в DLQ;
-- коммитит offsets вручную.
-
-### DLQ
-DLQ содержит сообщения, которые:
-
-- не прошли валидацию;
-- не удалось обработать;
-- не удалось сохранить как обработанные.
-
-Формат DLQ-сообщения:
-
-- `failed_at`
-- `original_topic`
-- `partition`
-- `offset`
-- `event_id`
-- `event_type`
-- `reason`
-- `payload`
-
-### Replay
-Утилита `cmd/dlqreplay` читает сообщения из DLQ и заново публикует исходный payload в основной topic.
-
-Нюанс:
-
-- если `event_id` уже есть в `processed_events`, consumer увидит повтор как дубликат;
-- чтобы действительно заново прогнать бизнес-обработку для того же `event_id`, нужно удалить запись из `processed_events`.
-
-## Метрики и наблюдаемость
-
-### Метрики API
-API публикует:
-
-- HTTP request count
-- HTTP latency
-- in-flight requests
-- count создания транзакций
-- count запросов аналитики
-- метрики Kafka producer
-- метрики outbox relay
-
-### Метрики consumer
-Consumer публикует:
-
-- успешно обработанные сообщения по `event_type`
-- invalid сообщения
-- duplicate сообщения
-- ошибки commit
-- публикации в DLQ
-- ошибки публикации в DLQ
-- retry handler
-- длительность обработки
-- лаг «время события в envelope (`event_time`) → успешная обработка» (`kafka_consumer_event_processing_lag_seconds`)
-- лаг «timestamp сообщения в Kafka → успешная обработка» (`kafka_consumer_kafka_processing_lag_seconds`)
-- применение streaming projection (`transaction_projection_applied_total`)
-
-### Метрики Kafka lag
-`kafka-exporter` добавляет lag consumer group и offsets.
-
-### Prometheus
-Сейчас Prometheus скрейпит:
-
-- `app:8080/metrics`
-- `consumer:2112/metrics`
+- `transaction-api:8080/metrics`
+- `analytics-query:8082/metrics`
+- `outbox-relay:8083/metrics`
+- `projection-builder:2112/metrics`
+- `risk-evaluation:2113/metrics`
 - `kafka-exporter:9308`
 
-### Grafana
-В проекте уже настроены:
+Основные группы метрик:
 
-- datasource Prometheus
-- дашборд HTTP / бизнес-метрик
-- дашборд Kafka pipeline (throughput, lag consumer group, DLQ/retry/errors, p50/p95/p99 задержек Kafka/outbox/consumer)
+- HTTP metrics для API и query-side;
+- outbox relay throughput / errors;
+- Kafka consumer processed / invalid / duplicate / retry / DLQ;
+- processing lag;
+- projection applied metrics;
+- lag consumer groups через `kafka-exporter`.
 
-Для демонстрации event-driven lifecycle можно запустить:
+## Минимальный e2e smoke scenario
 
-```bash
-make load-events
-```
-
-Профиль создает, обновляет и удаляет транзакции, а также читает `/analytics/stream`, чтобы показать projection, построенную из Kafka-событий.
-
-## Как тестировать сервис
-
-Минимальный сценарий:
-
-1. Поднять стек:
-
-```bash
-make docker-up
-```
-
-2. Проверить health:
-
-```bash
-curl -s http://localhost:8081/health
-curl -s http://localhost:8081/ready
-```
-
+1. Поднять стек `make compose-up`.
+2. Проверить `health` / `ready` для `transaction-api`, `analytics-query`, `outbox-relay`, `projection-builder`, `risk-evaluation`.
 3. Создать транзакцию через `POST /items`.
+4. Проверить:
+   - запись в `salestracker_ledger.transactions`;
+   - запись в `event_outbox`;
+   - появление записи в `salestracker_analytics.analytics_transactions`;
+   - появление записи в `monitoring_events` для крупной операции;
+   - две записи в `processed_events` для одного `event_id`: `projection-builder` и `risk-evaluation`;
+   - доступность результата через `analytics-query`.
 
-4. Убедиться, что:
+## Replay и DLQ
 
-- API вернул `201 Created`;
-- в логах `diploma_consumer` появилась обработка `transaction.created`;
-- в Grafana начали двигаться графики;
-- в Prometheus targets находятся в `UP`.
+`dlqreplay` читает сообщения из `transactions.events.dlq` и публикует исходный payload обратно в основной topic.
 
-5. Запустить нагрузку:
+Важно: replay не удаляет записи из `processed_events`. Если нужно реально переиграть то же событие, надо удалить запись конкретного subscriber-а вручную.
 
-```bash
-make load
-```
+## Ограничения текущей реализации
 
-6. Проверить:
+- PostgreSQL пока общий на уровне instance, хотя ownership уже разделен по logical databases.
+- Kafka учебный: один broker, без replication и security hardening.
+- Аутентификация demo-уровня, без отдельного IAM/Auth service.
+- Risk evaluation пока ограничен rule-based large amount detection, без полноценного fraud engine.
+- Grafana использует явные demo credentials `admin/admin`.
 
-- рост `http_requests_total`
-- рост `transactions_created_total`
-- рост `kafka_producer_messages_sent_total`
-- рост `kafka_consumer_messages_processed_total`
-- lag в Kafka dashboard
+## Что лучше показывать на защите
 
-## Типичные проблемы и диагностика
-
-### 1. `make run-consumer` падает с `address already in use`
-Обычно это значит, что consumer уже поднят через Docker Compose и порт `2112` занят контейнером `diploma_consumer`.
-
-Что делать:
-
-- не запускать `make run-consumer`, если уже выполнен `make docker-up`;
-- или остановить контейнер consumer;
-- или сменить порт метрик для локального запуска.
-
-### 2. Приложение падает на миграциях
-Раньше `app` и `consumer` могли параллельно стартовать и конкурировать за миграции. Сейчас это исправлено:
-
-- миграции выполняет только `app`;
-- в `RunMigrations` есть advisory lock;
-- consumer зависит от старта `app`.
-
-Если после неудачного старта БД осталась в промежуточном состоянии, проще всего:
-
-```bash
-make docker-down-v
-make docker-up
-```
-
-### 3. `ready` возвращает ошибку
-Сервис поднят, но БД недоступна. Нужно проверить:
-
-- контейнер PostgreSQL;
-- переменные окружения для БД;
-- readiness route `GET /ready`.
-
-### 4. `make load` показывает ошибки
-Нужно проверить:
-
-- действительно ли API слушает `http://localhost:8081`;
-- применены ли сиды из `002_init_data.sql`;
-- не изменились ли тестовые UUID;
-- свободен ли API от 4xx / 5xx в логах.
-
-### 5. DLQ replay не дает повторной обработки
-Это может быть нормой, если `event_id` уже есть в `processed_events`.
-
-## Безопасность и ограничения текущей реализации
-
-- Проект учебный, поэтому admin credentials Grafana заданы явно (`admin/admin`).
-- Аутентификация реализована demo-уровнем через статические Bearer-токены; полноценный JWT/OAuth/RBAC остается направлением развития.
-- Consumer реализует базовое правило мониторинга крупных операций; сложный rule engine пока не реализован.
-- Replay не удаляет автоматически записи из `processed_events`.
-- DLQ и retry реализованы в минимально полезном виде для учебного сценария.
-
-## Что уже реализовано по шагам Kafka
-
-1. Kafka-инфраструктура в Docker Compose.
-2. Producer в API после создания транзакции.
-3. Отдельный consumer-сервис.
-4. Дедупликация, DLQ, ручной commit.
-5. Метрики, Prometheus, Grafana, lag через kafka-exporter.
-6. Retry и replay.
-7. Audit log, Bearer-token auth и правило мониторинга крупных операций.
-8. Основа для демонстрации и описания в дипломе.
+1. `docker compose ps` с пятью runtime-сервисами: `transaction-api`, `analytics-query`, `outbox-relay`, `projection-builder`, `risk-evaluation`.
+2. Диаграмму event flow через outbox и Kafka.
+3. Создание транзакции и независимую обработку одним событием двумя subscribers.
+4. Отдельное подтверждение read-model (`analytics_transactions`) и risk-layer (`monitoring_events`).
+5. Grafana / Prometheus targets и consumer-group lag.
 
 ## Что можно развивать дальше
 
-- расширить payload и версионирование event contract;
-- добавить более сложную бизнес-обработку в consumer;
-- реализовать отдельный replay workflow или admin endpoint;
-- добавить алерты в Prometheus / Grafana;
-- добавить интеграционные тесты поверх Docker Compose;
-- добавить OpenTelemetry и трассировку;
-- вынести Kafka/consumer в отдельный сервисный модуль.
-
-## Краткий сценарий для защиты
-
-1. Показать `make docker-up`.
-2. Открыть `http://localhost:8081/health` и `http://localhost:8081/ready`.
-3. Создать транзакцию через UI или `curl`.
-4. Показать, что транзакция записалась в БД и событие ушло в Kafka.
-5. Показать логи consumer.
-6. Запустить `make load`.
-7. Открыть Grafana и показать метрики HTTP, producer, consumer и lag.
-8. При необходимости рассказать про DLQ и replay.
+- вынести `ledger` и `analytics` в отдельные физические PostgreSQL instances;
+- добавить notification subscriber поверх risk / monitoring events;
+- добавить schema registry и более строгую эволюцию event contract;
+- добавить OpenTelemetry и distributed tracing;
+- усилить auth / IAM / secrets management.

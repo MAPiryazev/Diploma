@@ -1,4 +1,8 @@
 const API_BASE = window.location.origin;
+const ANALYTICS_BASE =
+  window.__DIPLOMA_ANALYTICS_BASE__ ||
+  localStorage.getItem("analyticsBase") ||
+  `${window.location.protocol}//${window.location.hostname}:8082`;
 const AUTH_TOKEN = localStorage.getItem("authToken") || "";
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -292,7 +296,7 @@ function getAnalytics() {
   const toISO = new Date(to).toISOString();
 
   apiFetch(
-    `${API_BASE}/analytics?user_id=${encodeURIComponent(userId)}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(
+    `${ANALYTICS_BASE}/analytics?user_id=${encodeURIComponent(userId)}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(
       toISO
     )}`
   )

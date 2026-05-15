@@ -21,14 +21,18 @@ import (
 const migrationLockID int64 = 87236501
 
 func Connect(cfg *config.Config) (*dbpg.DB, error) {
+	return ConnectWithDatabase(cfg.LedgerDatabase)
+}
+
+func ConnectWithDatabase(database config.Database) (*dbpg.DB, error) {
 	masterDSN := fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Database.Host,
-		cfg.Database.Port,
-		cfg.Database.User,
-		cfg.Database.Password,
-		cfg.Database.Name,
-		cfg.Database.SSLMode,
+		database.Host,
+		database.Port,
+		database.User,
+		database.Password,
+		database.Name,
+		database.SSLMode,
 	)
 
 	opts := &dbpg.Options{

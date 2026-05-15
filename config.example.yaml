@@ -1,9 +1,17 @@
-postgres:
+ledger_db:
   host: localhost
   port: 5432
-  user: postgres
-  password: change-me
-  name: salestracker
+  user: ledger_app
+  password: change-me-ledger
+  name: salestracker_ledger
+  sslmode: disable
+
+analytics_db:
+  host: localhost
+  port: 5432
+  user: analytics_app
+  password: change-me-analytics
+  name: salestracker_analytics
   sslmode: disable
 
 server:
@@ -20,7 +28,7 @@ kafka:
     - localhost:9094
   topic: transactions.events
   dlq_topic: transactions.events.dlq
-  consumer_group_id: diploma-transactions-consumer
+  consumer_group_id: diploma-projection-builder
 
 consumer:
   metrics_port: 2112

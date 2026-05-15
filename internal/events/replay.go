@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	transactionevents "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -49,13 +50,7 @@ func RepublishTransactionCreatedPayload(ctx context.Context, w *kafka.Writer, pa
 }
 
 func userIDKeyFromTransactionEvent(env *TransactionEventEnvelope) (string, error) {
-	tx := env.Transaction
-	if tx == nil {
-		tx = env.After
-	}
-	if tx == nil {
-		tx = env.Before
-	}
+	tx := transactionevents.TransactionForEvent(env)
 	if tx == nil || tx.UserID == "" {
 		return "", errors.New("transaction.user_id missing for routing key")
 	}

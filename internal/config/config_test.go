@@ -47,22 +47,46 @@ func TestEnvStringSlice(t *testing.T) {
 func TestApplyEnvOverridesConfig(t *testing.T) {
 	cfg := defaultConfig()
 
-	t.Setenv("POSTGRES_HOST", "db.internal")
-	t.Setenv("POSTGRES_PORT", "6432")
+	t.Setenv("LEDGER_DB_HOST", "ledger-db.internal")
+	t.Setenv("LEDGER_DB_PORT", "6432")
+	t.Setenv("LEDGER_DB_NAME", "ledger_service")
+	t.Setenv("ANALYTICS_DB_HOST", "analytics-db.internal")
+	t.Setenv("ANALYTICS_DB_PORT", "7432")
+	t.Setenv("ANALYTICS_DB_NAME", "analytics_service")
 	t.Setenv("KAFKA_BROKERS", "kafka-1:9092,kafka-2:9092")
+	t.Setenv("ANALYTICS_PORT", "18082")
+	t.Setenv("RELAY_PORT", "18083")
 	t.Setenv("SECURITY_AUTH_TOKENS", "prod-token:user-1:auditor")
 	t.Setenv("MONITORING_LARGE_AMOUNT_THRESHOLD", "250000.5")
 
 	applyEnv(cfg)
 
-	if cfg.Database.Host != "db.internal" {
-		t.Fatalf("Database.Host = %q", cfg.Database.Host)
+	if cfg.LedgerDatabase.Host != "ledger-db.internal" {
+		t.Fatalf("LedgerDatabase.Host = %q", cfg.LedgerDatabase.Host)
 	}
-	if cfg.Database.Port != 6432 {
-		t.Fatalf("Database.Port = %d", cfg.Database.Port)
+	if cfg.LedgerDatabase.Port != 6432 {
+		t.Fatalf("LedgerDatabase.Port = %d", cfg.LedgerDatabase.Port)
+	}
+	if cfg.LedgerDatabase.Name != "ledger_service" {
+		t.Fatalf("LedgerDatabase.Name = %q", cfg.LedgerDatabase.Name)
+	}
+	if cfg.AnalyticsDatabase.Host != "analytics-db.internal" {
+		t.Fatalf("AnalyticsDatabase.Host = %q", cfg.AnalyticsDatabase.Host)
+	}
+	if cfg.AnalyticsDatabase.Port != 7432 {
+		t.Fatalf("AnalyticsDatabase.Port = %d", cfg.AnalyticsDatabase.Port)
+	}
+	if cfg.AnalyticsDatabase.Name != "analytics_service" {
+		t.Fatalf("AnalyticsDatabase.Name = %q", cfg.AnalyticsDatabase.Name)
 	}
 	if want := []string{"kafka-1:9092", "kafka-2:9092"}; !reflect.DeepEqual(cfg.Kafka.Brokers, want) {
 		t.Fatalf("Kafka.Brokers = %#v, want %#v", cfg.Kafka.Brokers, want)
+	}
+	if cfg.Analytics.Port != 18082 {
+		t.Fatalf("Analytics.Port = %d", cfg.Analytics.Port)
+	}
+	if cfg.Relay.Port != 18083 {
+		t.Fatalf("Relay.Port = %d", cfg.Relay.Port)
 	}
 	if want := []AuthToken{{Token: "prod-token", UserID: "user-1", Role: "auditor"}}; !reflect.DeepEqual(cfg.Security.AuthTokens, want) {
 		t.Fatalf("Security.AuthTokens = %#v, want %#v", cfg.Security.AuthTokens, want)

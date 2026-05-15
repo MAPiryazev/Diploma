@@ -12,13 +12,16 @@ import (
 )
 
 type Config struct {
-	Database   Database   `yaml:"postgres"`
-	Server     Server     `yaml:"server"`
-	App        App        `yaml:"app"`
-	Kafka      Kafka      `yaml:"kafka"`
-	Consumer   Consumer   `yaml:"consumer"`
-	Security   Security   `yaml:"security"`
-	Monitoring Monitoring `yaml:"monitoring"`
+	LedgerDatabase    Database   `yaml:"ledger_db"`
+	AnalyticsDatabase Database   `yaml:"analytics_db"`
+	Server            Server     `yaml:"server"`
+	App               App        `yaml:"app"`
+	Kafka             Kafka      `yaml:"kafka"`
+	Consumer          Consumer   `yaml:"consumer"`
+	Analytics         Analytics  `yaml:"analytics"`
+	Relay             Relay      `yaml:"relay"`
+	Security          Security   `yaml:"security"`
+	Monitoring        Monitoring `yaml:"monitoring"`
 }
 
 type Database struct {
@@ -50,6 +53,14 @@ type Kafka struct {
 
 type Consumer struct {
 	MetricsPort int `yaml:"metrics_port"`
+}
+
+type Analytics struct {
+	Port int `yaml:"port"`
+}
+
+type Relay struct {
+	Port int `yaml:"port"`
 }
 
 type Security struct {
@@ -91,12 +102,20 @@ func Load(envPath ...string) (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Database: Database{
+		LedgerDatabase: Database{
 			Host:     "localhost",
 			Port:     5432,
 			User:     "postgres",
 			Password: "password",
-			Name:     "salestracker",
+			Name:     "salestracker_ledger",
+			SSLMode:  "disable",
+		},
+		AnalyticsDatabase: Database{
+			Host:     "localhost",
+			Port:     5432,
+			User:     "postgres",
+			Password: "password",
+			Name:     "salestracker_analytics",
 			SSLMode:  "disable",
 		},
 		Server: Server{
@@ -112,10 +131,16 @@ func defaultConfig() *Config {
 			Brokers:         []string{"localhost:9094"},
 			Topic:           "transactions.events",
 			DLQTopic:        "transactions.events.dlq",
-			ConsumerGroupID: "diploma-transactions-consumer",
+			ConsumerGroupID: "diploma-projection-builder",
 		},
 		Consumer: Consumer{
 			MetricsPort: 2112,
+		},
+		Analytics: Analytics{
+			Port: 8082,
+		},
+		Relay: Relay{
+			Port: 8083,
 		},
 		Security: Security{
 			JWTSecret: "dev-jwt-secret-change-me",
@@ -177,12 +202,19 @@ func loadEnvFile(path string) error {
 }
 
 func applyEnv(cfg *Config) {
-	cfg.Database.Host = envString("POSTGRES_HOST", cfg.Database.Host)
-	cfg.Database.Port = envInt("POSTGRES_PORT", cfg.Database.Port)
-	cfg.Database.User = envString("POSTGRES_USER", cfg.Database.User)
-	cfg.Database.Password = envString("POSTGRES_PASSWORD", cfg.Database.Password)
-	cfg.Database.Name = envString("POSTGRES_NAME", envString("POSTGRES_DB", cfg.Database.Name))
-	cfg.Database.SSLMode = envString("POSTGRES_SSLMODE", cfg.Database.SSLMode)
+	cfg.LedgerDatabase.Host = envStringAny(cfg.LedgerDatabase.Host, "LEDGER_DB_HOST", "POSTGRES_HOST")
+	cfg.LedgerDatabase.Port = envIntAny(cfg.LedgerDatabase.Port, "LEDGER_DB_PORT", "POSTGRES_PORT")
+	cfg.LedgerDatabase.User = envStringAny(cfg.LedgerDatabase.User, "LEDGER_DB_USER", "POSTGRES_USER")
+	cfg.LedgerDatabase.Password = envStringAny(cfg.LedgerDatabase.Password, "LEDGER_DB_PASSWORD", "POSTGRES_PASSWORD")
+	cfg.LedgerDatabase.Name = envStringAny(cfg.LedgerDatabase.Name, "LEDGER_DB_NAME", "POSTGRES_NAME", "POSTGRES_DB")
+	cfg.LedgerDatabase.SSLMode = envStringAny(cfg.LedgerDatabase.SSLMode, "LEDGER_DB_SSLMODE", "POSTGRES_SSLMODE")
+
+	cfg.AnalyticsDatabase.Host = envStringAny(cfg.AnalyticsDatabase.Host, "ANALYTICS_DB_HOST")
+	cfg.AnalyticsDatabase.Port = envIntAny(cfg.AnalyticsDatabase.Port, "ANALYTICS_DB_PORT")
+	cfg.AnalyticsDatabase.User = envStringAny(cfg.AnalyticsDatabase.User, "ANALYTICS_DB_USER")
+	cfg.AnalyticsDatabase.Password = envStringAny(cfg.AnalyticsDatabase.Password, "ANALYTICS_DB_PASSWORD")
+	cfg.AnalyticsDatabase.Name = envStringAny(cfg.AnalyticsDatabase.Name, "ANALYTICS_DB_NAME")
+	cfg.AnalyticsDatabase.SSLMode = envStringAny(cfg.AnalyticsDatabase.SSLMode, "ANALYTICS_DB_SSLMODE")
 
 	cfg.Server.Port = envInt("SERVER_PORT", cfg.Server.Port)
 	cfg.Server.ReadTimeout = envInt("SERVER_READ_TIMEOUT", cfg.Server.ReadTimeout)
@@ -197,6 +229,8 @@ func applyEnv(cfg *Config) {
 	cfg.Kafka.ConsumerGroupID = envString("KAFKA_CONSUMER_GROUP_ID", cfg.Kafka.ConsumerGroupID)
 
 	cfg.Consumer.MetricsPort = envInt("CONSUMER_METRICS_PORT", cfg.Consumer.MetricsPort)
+	cfg.Analytics.Port = envInt("ANALYTICS_PORT", cfg.Analytics.Port)
+	cfg.Relay.Port = envInt("RELAY_PORT", cfg.Relay.Port)
 
 	cfg.Security.JWTSecret = envString("SECURITY_JWT_SECRET", cfg.Security.JWTSecret)
 	cfg.Security.JWTTTL = envString("SECURITY_JWT_TTL", cfg.Security.JWTTTL)
@@ -242,6 +276,15 @@ func envString(name, fallback string) string {
 	return value
 }
 
+func envStringAny(fallback string, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
 func envStringSlice(name string, fallback []string) []string {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
@@ -260,6 +303,19 @@ func envStringSlice(name string, fallback []string) []string {
 		return fallback
 	}
 	return values
+}
+
+func envIntAny(fallback int, names ...string) int {
+	for _, name := range names {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			continue
+		}
+		if value, err := strconv.Atoi(raw); err == nil {
+			return value
+		}
+	}
+	return fallback
 }
 
 func envInt(name string, fallback int) int {
