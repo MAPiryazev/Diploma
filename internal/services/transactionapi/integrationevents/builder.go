@@ -70,6 +70,32 @@ func (Builder) BuildDeleted(tx *models.Transaction) ([]repository.OutboxMessage,
 	return []repository.OutboxMessage{message}, nil
 }
 
+func (Builder) BuildApproved(tx *models.Transaction) ([]repository.OutboxMessage, error) {
+	payload := payloadFromModel(tx)
+	env, err := transactionevents.NewApproved(payload, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	message, err := marshalOutboxMessage(env, tx.UserID)
+	if err != nil {
+		return nil, err
+	}
+	return []repository.OutboxMessage{message}, nil
+}
+
+func (Builder) BuildRejected(tx *models.Transaction) ([]repository.OutboxMessage, error) {
+	payload := payloadFromModel(tx)
+	env, err := transactionevents.NewRejected(payload, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	message, err := marshalOutboxMessage(env, tx.UserID)
+	if err != nil {
+		return nil, err
+	}
+	return []repository.OutboxMessage{message}, nil
+}
+
 func payloadFromModel(tx *models.Transaction) *transactionevents.TransactionPayload {
 	if tx == nil {
 		return nil

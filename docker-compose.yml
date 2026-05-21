@@ -125,6 +125,8 @@ services:
     env_file:
       - environment/.env
     environment:
+      LEDGER_DB_HOST: postgres-ledger
+      LEDGER_DB_PORT: "5432"
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
       KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
@@ -141,6 +143,45 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
+      postgres-ledger:
+        condition: service_healthy
+      postgres-analytics:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  transaction-executor:
+    build:
+      context: .
+      target: transactionexecutor-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      LEDGER_DB_HOST: postgres-ledger
+      LEDGER_DB_PORT: "5432"
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      KAFKA_CONSUMER_GROUP_ID: ${TRANSACTION_EXECUTOR_GROUP_ID:-diploma-transaction-executor}
+      CONSUMER_METRICS_PORT: "2114"
+      ANALYTICS_DB_HOST: postgres-analytics
+      ANALYTICS_DB_PORT: "5432"
+    ports:
+      - "${TRANSACTION_EXECUTOR_METRICS_PORT:-2114}:2114"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2114/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-ledger:
+        condition: service_healthy
       postgres-analytics:
         condition: service_healthy
       kafka:
@@ -270,6 +311,8 @@ services:
       projection-builder:
         condition: service_healthy
       risk-evaluation:
+        condition: service_healthy
+      transaction-executor:
         condition: service_healthy
       kafka-exporter:
         condition: service_started

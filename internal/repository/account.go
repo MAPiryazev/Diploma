@@ -24,33 +24,35 @@ func (r *accountRepository) Create(ctx context.Context, acc *models.Account) (*m
 	query := `
 		INSERT INTO accounts (user_id, name, number)
 		VALUES ($1, $2, $3)
-		RETURNING id, created_at
+		RETURNING id, balance::text, created_at
 	`
 
 	var id string
+	var balance string
 	var createdAt time.Time
 	err := r.db.Master.QueryRowContext(ctx, query, acc.UserID, acc.Name, acc.Number).
-		Scan(&id, &createdAt)
+		Scan(&id, &balance, &createdAt)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create account: %w", err)
 	}
 
 	acc.ID = id
+	acc.Balance = balance
 	acc.CreatedAt = createdAt
 	return acc, nil
 }
 
 func (r *accountRepository) GetByID(ctx context.Context, id, userID string) (*models.Account, error) {
 	query := `
-		SELECT id, user_id, name, number, created_at
+		SELECT id, user_id, name, number, balance::text, created_at
 		FROM accounts
 		WHERE id = $1 AND user_id = $2
 	`
 
 	var acc models.Account
 	err := r.db.QueryRowContext(ctx, query, id, userID).
-		Scan(&acc.ID, &acc.UserID, &acc.Name, &acc.Number, &acc.CreatedAt)
+		Scan(&acc.ID, &acc.UserID, &acc.Name, &acc.Number, &acc.Balance, &acc.CreatedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -64,7 +66,7 @@ func (r *accountRepository) GetByID(ctx context.Context, id, userID string) (*mo
 
 func (r *accountRepository) ListByUser(ctx context.Context, userID string) ([]*models.Account, error) {
 	query := `
-		SELECT id, user_id, name, number, created_at
+		SELECT id, user_id, name, number, balance::text, created_at
 		FROM accounts
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -79,7 +81,7 @@ func (r *accountRepository) ListByUser(ctx context.Context, userID string) ([]*m
 	var accounts []*models.Account
 	for rows.Next() {
 		var acc models.Account
-		err := rows.Scan(&acc.ID, &acc.UserID, &acc.Name, &acc.Number, &acc.CreatedAt)
+		err := rows.Scan(&acc.ID, &acc.UserID, &acc.Name, &acc.Number, &acc.Balance, &acc.CreatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan account: %w", err)
 		}

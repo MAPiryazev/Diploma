@@ -12,6 +12,7 @@ RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server && \
     CGO_ENABLED=0 go build -o /out/relay ./cmd/relay && \
     CGO_ENABLED=0 go build -o /out/projectionbuilder ./cmd/projectionbuilder && \
     CGO_ENABLED=0 go build -o /out/riskevaluation ./cmd/riskevaluation && \
+    CGO_ENABLED=0 go build -o /out/transactionexecutor ./cmd/transactionexecutor && \
     CGO_ENABLED=0 go build -o /out/dlqreplay ./cmd/dlqreplay
 
 FROM alpine:3.20 AS runtime-base
@@ -78,6 +79,17 @@ COPY --from=runtime-base /app /app
 EXPOSE 2113
 
 CMD ["./riskevaluation"]
+
+FROM runtime-base AS transactionexecutor-runtime
+
+WORKDIR /app/cmd/transactionexecutor
+
+COPY --from=runtime-base /out/transactionexecutor ./transactionexecutor
+COPY --from=runtime-base /app /app
+
+EXPOSE 2114
+
+CMD ["./transactionexecutor"]
 
 FROM runtime-base AS dlqreplay-runtime
 

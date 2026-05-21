@@ -10,7 +10,6 @@ import (
 	processingstore "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/services/processing/store"
 	processingsubscriber "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/services/processing/subscriber"
 	transactionevents "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
-	"github.com/wb-go/wbf/dbpg"
 )
 
 const (
@@ -30,14 +29,18 @@ type projectionHandler struct {
 	analyticsTransactionsStore processingstore.AnalyticsTransactionsStore
 }
 
-func newProjectionHandler(database *dbpg.DB) processingsubscriber.Handler {
+func newProjectionHandler(deps processingsubscriber.Dependencies) processingsubscriber.Handler {
 	return projectionHandler{
-		statsStore:                 processingstore.NewPostgresTransactionEventStatsStore(database),
-		analyticsTransactionsStore: processingstore.NewPostgresAnalyticsTransactionsStore(database),
+		statsStore:                 processingstore.NewPostgresTransactionEventStatsStore(deps.AnalyticsDB),
+		analyticsTransactionsStore: processingstore.NewPostgresAnalyticsTransactionsStore(deps.AnalyticsDB),
 	}
 }
 
 func (h projectionHandler) Handle(ctx context.Context, env *transactionevents.Envelope) error {
+	if shouldIgnoreEventType(env.EventType) {
+		return nil
+	}
+
 	tx := transactionevents.TransactionForEvent(env)
 	if tx == nil {
 		return errors.New("transaction payload is nil")
@@ -69,6 +72,15 @@ func (h projectionHandler) Handle(ctx context.Context, env *transactionevents.En
 
 	observability.RecordTransactionProjectionApplied(env.EventType)
 	return nil
+}
+
+func shouldIgnoreEventType(eventType string) bool {
+	switch eventType {
+	case transactionevents.EventTypeTransactionApproved, transactionevents.EventTypeTransactionRejected:
+		return true
+	default:
+		return false
+	}
 }
 
 func buildTransactionEventStat(env *transactionevents.Envelope, tx *transactionevents.TransactionPayload) processingstore.TransactionEventStat {

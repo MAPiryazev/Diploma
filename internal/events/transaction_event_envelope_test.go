@@ -33,6 +33,37 @@ func TestNewTransactionStatusChangedEnvelope_SetsStatusesAndCorrelation(t *testi
 	}
 }
 
+func TestNewTransactionDecisionEnvelope_UsesTransactionPayload(t *testing.T) {
+	tx := &transactionevents.TransactionPayload{ID: "tx-1", UserID: "user-1", Status: "pending"}
+
+	tests := []struct {
+		name      string
+		build     func(*transactionevents.TransactionPayload, time.Time) (*transactionevents.Envelope, error)
+		eventType string
+	}{
+		{name: "approved", build: transactionevents.NewApproved, eventType: EventTypeTransactionApproved},
+		{name: "rejected", build: transactionevents.NewRejected, eventType: EventTypeTransactionRejected},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, err := tt.build(tx, time.Time{})
+			if err != nil {
+				t.Fatalf("build() error = %v", err)
+			}
+			if env.EventType != tt.eventType {
+				t.Fatalf("EventType = %q, want %q", env.EventType, tt.eventType)
+			}
+			if env.Transaction == nil || env.Transaction.ID != tx.ID {
+				t.Fatal("expected transaction payload to be preserved")
+			}
+			if env.Before != nil || env.After != nil {
+				t.Fatal("decision event should not carry before/after snapshots")
+			}
+		})
+	}
+}
+
 func TestParseTransactionCreatedJSONRejectsWrongEventType(t *testing.T) {
 	raw := `{
 		"event_id":"e1",
@@ -83,6 +114,37 @@ func TestParseTransactionCreatedJSONRejectsWrongEventType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `want "transaction.created"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTransactionEventJSON_AllowsDecisionEventTypes(t *testing.T) {
+	raw := `{
+		"event_id":"e1",
+		"event_type":"transaction.approved",
+		"event_time":"2025-01-01T12:00:00Z",
+		"correlation_id":"tx-1",
+		"schema_version":1,
+		"source":"diploma-app",
+		"aggregate_id":"tx-1",
+		"transaction":{
+			"id":"tx-1",
+			"user_id":"user-1",
+			"amount":"10.00",
+			"currency":"USD",
+			"type":"expense",
+			"status":"pending",
+			"occurred_at":"2025-01-01T12:00:00Z",
+			"created_at":"2025-01-01T12:00:00Z",
+			"updated_at":"2025-01-01T12:00:00Z"
+		}
+	}`
+
+	env, err := ParseTransactionEventJSON([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseTransactionEventJSON() error = %v", err)
+	}
+	if env.EventType != EventTypeTransactionApproved {
+		t.Fatalf("EventType = %q, want %q", env.EventType, EventTypeTransactionApproved)
 	}
 }
 

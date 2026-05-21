@@ -16,6 +16,7 @@ type Account struct {
 	UserID    string    `json:"user_id"`
 	Name      string    `json:"name"`
 	Number    string    `json:"number"`
+	Balance   string    `json:"balance"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

@@ -8,13 +8,15 @@ import (
 )
 
 const (
-	EventTypeTransactionCreated = transactionevents.EventTypeTransactionCreated
-	EventTypeTransactionUpdated = transactionevents.EventTypeTransactionUpdated
-	EventTypeTransactionDeleted = transactionevents.EventTypeTransactionDeleted
-	EventTypeStatusChanged      = transactionevents.EventTypeStatusChanged
-	SupportedSchemaVersion      = transactionevents.SupportedSchemaVersion
-	EventSourceDiplomaApp       = transactionevents.EventSourceDiplomaApp
-	DefaultTransactionsTopic    = transactionevents.DefaultTransactionsTopic
+	EventTypeTransactionCreated  = transactionevents.EventTypeTransactionCreated
+	EventTypeTransactionUpdated  = transactionevents.EventTypeTransactionUpdated
+	EventTypeTransactionDeleted  = transactionevents.EventTypeTransactionDeleted
+	EventTypeTransactionApproved = transactionevents.EventTypeTransactionApproved
+	EventTypeTransactionRejected = transactionevents.EventTypeTransactionRejected
+	EventTypeStatusChanged       = transactionevents.EventTypeStatusChanged
+	SupportedSchemaVersion       = transactionevents.SupportedSchemaVersion
+	EventSourceDiplomaApp        = transactionevents.EventSourceDiplomaApp
+	DefaultTransactionsTopic     = transactionevents.DefaultTransactionsTopic
 )
 
 // TransactionEventEnvelope is kept as a compatibility alias for runtime packages
@@ -34,6 +36,14 @@ func NewTransactionUpdatedEnvelope(before, after *models.Transaction, eventTime 
 
 func NewTransactionDeletedEnvelope(tx *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
 	return transactionevents.NewDeleted(payloadFromModel(tx), eventTime)
+}
+
+func NewTransactionApprovedEnvelope(tx *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
+	return transactionevents.NewApproved(payloadFromModel(tx), eventTime)
+}
+
+func NewTransactionRejectedEnvelope(tx *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {
+	return transactionevents.NewRejected(payloadFromModel(tx), eventTime)
 }
 
 func NewTransactionStatusChangedEnvelope(before, after *models.Transaction, eventTime time.Time) (*TransactionEventEnvelope, error) {

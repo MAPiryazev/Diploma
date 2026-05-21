@@ -536,7 +536,7 @@ func newTxBody(rnd *rand.Rand) txBody {
 		ProviderID:    &prov,
 		CategoryID:    &cat,
 		Type:          "expense",
-		Status:        "done",
+		Status:        "pending",
 		Description:   &desc,
 		ExternalID:    &ext,
 		OccurredAt:    time.Now().UTC().Format(time.RFC3339),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	apperrors "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/errors"
@@ -86,8 +87,10 @@ func (s *service) CreateTransaction(ctx context.Context, req *CreateTransactionR
 	if err := validator.ValidateTransactionType(req.Type); err != nil {
 		return nil, err
 	}
-	if err := validator.ValidateTransactionStatus(req.Status); err != nil {
-		return nil, err
+	if status := strings.TrimSpace(req.Status); status != "" {
+		if err := validator.ValidateTransactionStatus(status); err != nil {
+			return nil, err
+		}
 	}
 	if err := validator.ValidateCurrency(req.Currency); err != nil {
 		return nil, err
@@ -137,7 +140,7 @@ func (s *service) CreateTransaction(ctx context.Context, req *CreateTransactionR
 		ProviderID:    req.ProviderID,
 		CategoryID:    req.CategoryID,
 		Type:          req.Type,
-		Status:        req.Status,
+		Status:        "pending",
 		Description:   req.Description,
 		ExternalID:    req.ExternalID,
 		OccurredAt:    occurredAt,
@@ -196,8 +199,10 @@ func (s *service) UpdateTransaction(ctx context.Context, req *UpdateTransactionR
 	if err := validator.ValidateTransactionType(req.Type); err != nil {
 		return err
 	}
-	if err := validator.ValidateTransactionStatus(req.Status); err != nil {
-		return err
+	if status := strings.TrimSpace(req.Status); status != "" {
+		if err := validator.ValidateTransactionStatus(status); err != nil {
+			return err
+		}
 	}
 	if err := validator.ValidateCurrency(req.Currency); err != nil {
 		return err
@@ -224,6 +229,20 @@ func (s *service) UpdateTransaction(ctx context.Context, req *UpdateTransactionR
 		return err
 	}
 
+	current, err := s.txRepo.GetByID(ctx, req.ID, req.UserID)
+	if err != nil {
+		if errors.Is(err, apperrors.ErrNotFound) {
+			return err
+		}
+		return fmt.Errorf("failed to get transaction: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(current.Status), "pending") {
+		return &apperrors.ValidationError{Field: "status", Message: "only pending transactions can be updated"}
+	}
+	if status := strings.TrimSpace(req.Status); status != "" && !strings.EqualFold(status, current.Status) {
+		return &apperrors.ValidationError{Field: "status", Message: "status is managed asynchronously"}
+	}
+
 	occurredAt, _ := time.Parse(time.RFC3339, req.OccurredAt)
 	tx := &models.Transaction{
 		ID:            req.ID,
@@ -235,7 +254,7 @@ func (s *service) UpdateTransaction(ctx context.Context, req *UpdateTransactionR
 		ProviderID:    req.ProviderID,
 		CategoryID:    req.CategoryID,
 		Type:          req.Type,
-		Status:        req.Status,
+		Status:        current.Status,
 		Description:   req.Description,
 		ExternalID:    req.ExternalID,
 		OccurredAt:    occurredAt,
@@ -256,6 +275,17 @@ func (s *service) DeleteTransaction(ctx context.Context, txID, userID string) er
 	}
 	if err := validator.ValidateUUID(userID); err != nil {
 		return err
+	}
+
+	current, err := s.txRepo.GetByID(ctx, txID, userID)
+	if err != nil {
+		if errors.Is(err, apperrors.ErrNotFound) {
+			return err
+		}
+		return fmt.Errorf("failed to get transaction: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(current.Status), "pending") {
+		return &apperrors.ValidationError{Field: "status", Message: "only pending transactions can be deleted"}
 	}
 
 	if err := s.txRepo.Delete(ctx, txID, userID); err != nil {

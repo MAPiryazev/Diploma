@@ -10,13 +10,15 @@ import (
 )
 
 const (
-	EventTypeTransactionCreated = "transaction.created"
-	EventTypeTransactionUpdated = "transaction.updated"
-	EventTypeTransactionDeleted = "transaction.deleted"
-	EventTypeStatusChanged      = "transaction.status_changed"
-	SupportedSchemaVersion      = 1
-	EventSourceDiplomaApp       = "diploma-app"
-	DefaultTransactionsTopic    = "transactions.events"
+	EventTypeTransactionCreated  = "transaction.created"
+	EventTypeTransactionUpdated  = "transaction.updated"
+	EventTypeTransactionDeleted  = "transaction.deleted"
+	EventTypeTransactionApproved = "transaction.approved"
+	EventTypeTransactionRejected = "transaction.rejected"
+	EventTypeStatusChanged       = "transaction.status_changed"
+	SupportedSchemaVersion       = 1
+	EventSourceDiplomaApp        = "diploma-app"
+	DefaultTransactionsTopic     = "transactions.events"
 )
 
 // Envelope is the stable JSON contract for transaction lifecycle events.
@@ -76,6 +78,20 @@ func NewDeleted(tx *TransactionPayload, eventTime time.Time) (*Envelope, error) 
 		return nil, errors.New("transaction is nil")
 	}
 	return New(EventTypeTransactionDeleted, tx.ID, tx, tx, nil, "", "", eventTime)
+}
+
+func NewApproved(tx *TransactionPayload, eventTime time.Time) (*Envelope, error) {
+	if tx == nil {
+		return nil, errors.New("transaction is nil")
+	}
+	return New(EventTypeTransactionApproved, tx.ID, tx, nil, nil, "", "", eventTime)
+}
+
+func NewRejected(tx *TransactionPayload, eventTime time.Time) (*Envelope, error) {
+	if tx == nil {
+		return nil, errors.New("transaction is nil")
+	}
+	return New(EventTypeTransactionRejected, tx.ID, tx, nil, nil, "", "", eventTime)
 }
 
 func NewStatusChanged(before, after *TransactionPayload, eventTime time.Time) (*Envelope, error) {
@@ -210,6 +226,10 @@ func (e *Envelope) Validate() error {
 		if err := validateTransactionMatchesAggregate(e.Transaction, e.AggregateID, "transaction"); err != nil {
 			return err
 		}
+	case EventTypeTransactionApproved, EventTypeTransactionRejected:
+		if err := validateTransactionMatchesAggregate(e.Transaction, e.AggregateID, "transaction"); err != nil {
+			return err
+		}
 	case EventTypeTransactionUpdated:
 		if err := validateTransactionMatchesAggregate(e.After, e.AggregateID, "after"); err != nil {
 			return err
@@ -234,7 +254,12 @@ func (e *Envelope) Validate() error {
 
 func isSupportedEventType(eventType string) bool {
 	switch eventType {
-	case EventTypeTransactionCreated, EventTypeTransactionUpdated, EventTypeTransactionDeleted, EventTypeStatusChanged:
+	case EventTypeTransactionCreated,
+		EventTypeTransactionUpdated,
+		EventTypeTransactionDeleted,
+		EventTypeTransactionApproved,
+		EventTypeTransactionRejected,
+		EventTypeStatusChanged:
 		return true
 	default:
 		return false

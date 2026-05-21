@@ -10,18 +10,20 @@ import (
 	"time"
 
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/config"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/observability"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/repository"
 	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/security"
 	processingstore "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/services/processing/store"
 	processingsubscriber "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/services/processing/subscriber"
+	transactionintegration "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/services/transactionapi/integrationevents"
 	transactionevents "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
 	platformruntime "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/platform/runtime"
-	"github.com/wb-go/wbf/dbpg"
 )
 
 const (
-	serviceName     = "risk-evaluation"
-	subscriberName  = "risk-evaluation"
+	serviceName    = "risk-evaluation"
+	subscriberName = "risk-evaluation"
 )
 
 func Run(envPath string) error {
@@ -33,27 +35,42 @@ func Run(envPath string) error {
 	return processingsubscriber.Run(envPath, processingsubscriber.Options{
 		ServiceName:    serviceName,
 		SubscriberName: subscriberName,
+		NeedsLedgerDB:  true,
 	}, newRiskHandler(cfg))
 }
 
 type riskHandler struct {
 	monitoringStore processingstore.MonitoringEventsStore
 	riskRepo        riskRepository
+	decisionWriter  repository.TransactionDecisionPublisher
 	defaultRules    map[string]ruleConfig
 }
 
 func newRiskHandler(cfg *config.Config) processingsubscriber.HandlerFactory {
-	return func(database *dbpg.DB) processingsubscriber.Handler {
-		riskRepo := newPostgresRiskRepository(database)
+	return func(deps processingsubscriber.Dependencies) processingsubscriber.Handler {
+		riskRepo := newPostgresRiskRepository(deps.AnalyticsDB)
+		decisionWriter := repository.NewTransactionDecisionPublisher(
+			deps.LedgerDB,
+			transactionintegration.NewBuilder(),
+			cfg.Kafka.Topic,
+		)
 		return riskHandler{
-			monitoringStore: processingstore.NewPostgresMonitoringEventsStore(database),
+			monitoringStore: processingstore.NewPostgresMonitoringEventsStore(deps.AnalyticsDB),
 			riskRepo:        riskRepo,
+			decisionWriter:  decisionWriter,
 			defaultRules:    defaultRuleConfigs(cfg.Monitoring.LargeAmountThreshold),
 		}
 	}
 }
 
 func (h riskHandler) Handle(ctx context.Context, env *transactionevents.Envelope) error {
+	if env == nil {
+		return errors.New("event envelope is nil")
+	}
+	if env.EventType != transactionevents.EventTypeTransactionCreated {
+		return nil
+	}
+
 	tx := transactionevents.TransactionForEvent(env)
 	if tx == nil {
 		return errors.New("transaction payload is nil")
@@ -91,10 +108,7 @@ func (h riskHandler) Handle(ctx context.Context, env *transactionevents.Envelope
 	if err != nil {
 		return err
 	}
-	if len(rules) == 0 {
-		return nil
-	}
-
+	approved := true
 	for _, rule := range rules {
 		match, ok, err := h.evaluateRule(ctx, rule, tx, amount, occurredAt)
 		if err != nil {
@@ -119,6 +133,10 @@ func (h riskHandler) Handle(ctx context.Context, env *transactionevents.Envelope
 			match.Reason,
 		)
 
+		if shouldRejectSeverity(match.Severity) {
+			approved = false
+		}
+
 		if h.monitoringStore == nil {
 			continue
 		}
@@ -134,6 +152,44 @@ func (h riskHandler) Handle(ctx context.Context, env *transactionevents.Envelope
 		}
 	}
 
+	if h.decisionWriter == nil {
+		return errors.New("transaction decision publisher is nil")
+	}
+
+	model := &models.Transaction{
+		ID:            tx.ID,
+		UserID:        tx.UserID,
+		Amount:        tx.Amount,
+		Currency:      tx.Currency,
+		FromAccountID: tx.FromAccountID,
+		ToAccountID:   tx.ToAccountID,
+		ProviderID:    tx.ProviderID,
+		CategoryID:    tx.CategoryID,
+		Type:          tx.Type,
+		Status:        tx.Status,
+		Description:   tx.Description,
+		ExternalID:    tx.ExternalID,
+		OccurredAt:    tx.OccurredAt,
+		CreatedAt:     tx.CreatedAt,
+		UpdatedAt:     tx.UpdatedAt,
+		DeletedAt:     tx.DeletedAt,
+	}
+	if err := h.decisionWriter.PublishDecision(ctx, model, approved); err != nil {
+		return err
+	}
+
+	decisionType := transactionevents.EventTypeTransactionApproved
+	if !approved {
+		decisionType = transactionevents.EventTypeTransactionRejected
+	}
+	log.Printf(
+		"risk decision published event_id=%s tx_id=%s decision_event_type=%s approved=%t",
+		security.MaskID(env.EventID),
+		security.MaskID(tx.ID),
+		decisionType,
+		approved,
+	)
+
 	return nil
 }
 
@@ -148,6 +204,15 @@ func (h riskHandler) activeRules(ctx context.Context) ([]ruleConfig, error) {
 	}
 
 	return mergedRuleConfigs(h.defaultRules, overrides), nil
+}
+
+func shouldRejectSeverity(severity string) bool {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "warning", "critical":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h riskHandler) evaluateRule(

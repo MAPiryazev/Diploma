@@ -1,6 +1,7 @@
 package events
 
 import (
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/models"
 	transactionevents "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/shared/contracts/transactionevents"
 	"testing"
 	"time"
@@ -64,5 +65,41 @@ func TestParseTransactionCreatedJSON(t *testing.T) {
 	}
 	if env.Transaction.UserID != "u1" {
 		t.Fatalf("user_id: got %q", env.Transaction.UserID)
+	}
+}
+
+func TestNewTransactionDecisionEnvelopeCompatibilityWrappers(t *testing.T) {
+	tx := &transactionevents.TransactionPayload{
+		ID:         "tx-1",
+		UserID:     "user-1",
+		Status:     "pending",
+		OccurredAt: time.Now().UTC(),
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+
+	model := &models.Transaction{
+		ID:         tx.ID,
+		UserID:     tx.UserID,
+		Status:     tx.Status,
+		OccurredAt: tx.OccurredAt,
+		CreatedAt:  tx.CreatedAt,
+		UpdatedAt:  tx.UpdatedAt,
+	}
+
+	approved, err := NewTransactionApprovedEnvelope(model, time.Time{})
+	if err != nil {
+		t.Fatalf("NewTransactionApprovedEnvelope() error = %v", err)
+	}
+	if approved.EventType != EventTypeTransactionApproved {
+		t.Fatalf("approved.EventType = %q", approved.EventType)
+	}
+
+	rejected, err := NewTransactionRejectedEnvelope(model, time.Time{})
+	if err != nil {
+		t.Fatalf("NewTransactionRejectedEnvelope() error = %v", err)
+	}
+	if rejected.EventType != EventTypeTransactionRejected {
+		t.Fatalf("rejected.EventType = %q", rejected.EventType)
 	}
 }

@@ -32,11 +32,17 @@ type Handler interface {
 	Handle(ctx context.Context, env *transactionevents.Envelope) error
 }
 
-type HandlerFactory func(database *dbpg.DB) Handler
+type Dependencies struct {
+	AnalyticsDB *dbpg.DB
+	LedgerDB    *dbpg.DB
+}
+
+type HandlerFactory func(deps Dependencies) Handler
 
 type Options struct {
 	ServiceName    string
 	SubscriberName string
+	NeedsLedgerDB  bool
 }
 
 func Run(envPath string, options Options, newHandler HandlerFactory) error {
@@ -66,18 +72,30 @@ func Run(envPath string, options Options, newHandler HandlerFactory) error {
 		return errors.New("kafka brokers are empty")
 	}
 
-	database, err := platformruntime.ConnectAnalyticsDatabase(cfg)
+	analyticsDB, err := platformruntime.ConnectAnalyticsDatabase(cfg)
 	if err != nil {
 		return err
 	}
-	defer platformruntime.CloseDatabase(database)
+	defer platformruntime.CloseDatabase(analyticsDB)
 
-	if err := db.RunMigrations(database, "../../migrations/analytics"); err != nil {
+	if err := db.RunMigrations(analyticsDB, "../../migrations/analytics"); err != nil {
 		return fmt.Errorf("run analytics migrations: %w", err)
 	}
 
-	processedStore := processingstore.NewPostgresProcessedEventsStore(database)
-	handler := newHandler(database)
+	var ledgerDB *dbpg.DB
+	if options.NeedsLedgerDB {
+		ledgerDB, err = platformruntime.ConnectLedgerDatabase(cfg)
+		if err != nil {
+			return err
+		}
+		defer platformruntime.CloseDatabase(ledgerDB)
+	}
+
+	processedStore := processingstore.NewPostgresProcessedEventsStore(analyticsDB)
+	handler := newHandler(Dependencies{
+		AnalyticsDB: analyticsDB,
+		LedgerDB:    ledgerDB,
+	})
 	if handler == nil {
 		return errors.New("subscriber handler is nil")
 	}
@@ -91,7 +109,7 @@ func Run(envPath string, options Options, newHandler HandlerFactory) error {
 		}
 	}()
 
-	healthHandler := platformhealth.New(database)
+	healthHandler := platformhealth.New(analyticsDB)
 	metricsAddr := fmt.Sprintf(":%d", cfg.Consumer.MetricsPort)
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("GET /metrics", promhttp.Handler())

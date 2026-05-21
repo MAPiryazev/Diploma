@@ -198,6 +198,10 @@ func (r *transactionRepository) Update(ctx context.Context, tx *models.Transacti
 		return fmt.Errorf("failed to update transaction: %w", err)
 	}
 
+	if err := r.reconcileExecutionBalances(ctx, dbTx, before, after); err != nil {
+		return err
+	}
+
 	messages, err := r.builder.BuildUpdated(before, after)
 	if err != nil {
 		return fmt.Errorf("build transaction update outbox events: %w", err)
@@ -237,6 +241,10 @@ func (r *transactionRepository) Delete(ctx context.Context, id, userID string) e
 			return apperrors.ErrNotFound
 		}
 		return fmt.Errorf("failed to delete transaction: %w", err)
+	}
+
+	if err := r.reconcileExecutionBalances(ctx, dbTx, tx, nil); err != nil {
+		return err
 	}
 
 	messages, err := r.builder.BuildDeleted(tx)

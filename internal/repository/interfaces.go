@@ -12,6 +12,11 @@ type TransactionRepository interface {
 	ListByUser(ctx context.Context, userID string, limit, offset int) ([]*models.Transaction, error)
 	Update(ctx context.Context, tx *models.Transaction) error
 	Delete(ctx context.Context, id, userID string) error
+	ResolvePending(ctx context.Context, id string, approved bool) (*models.Transaction, bool, error)
+}
+
+type TransactionDecisionPublisher interface {
+	PublishDecision(ctx context.Context, tx *models.Transaction, approved bool) error
 }
 
 type AccountRepository interface {
