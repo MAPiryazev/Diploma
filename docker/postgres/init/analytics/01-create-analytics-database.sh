@@ -8,20 +8,12 @@ psql_admin() {
 psql_admin <<EOSQL
 DO \$\$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${LEDGER_DB_USER}') THEN
-        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${LEDGER_DB_USER}', '${LEDGER_DB_PASSWORD}');
-    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ANALYTICS_DB_USER}') THEN
         EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${ANALYTICS_DB_USER}', '${ANALYTICS_DB_PASSWORD}');
     END IF;
 END
 \$\$;
 EOSQL
-
-ledger_exists="$(psql_admin -tAc "SELECT 1 FROM pg_database WHERE datname = '${LEDGER_DB_NAME}'")"
-if [ "$ledger_exists" != "1" ]; then
-  psql_admin -c "CREATE DATABASE \"${LEDGER_DB_NAME}\" OWNER \"${LEDGER_DB_USER}\""
-fi
 
 analytics_exists="$(psql_admin -tAc "SELECT 1 FROM pg_database WHERE datname = '${ANALYTICS_DB_NAME}'")"
 if [ "$analytics_exists" != "1" ]; then

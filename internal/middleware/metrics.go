@@ -49,6 +49,8 @@ func normalizeRouteLabel(path string) string {
 		return "/analytics"
 	case path == "/analytics/stream":
 		return "/analytics/stream"
+	case path == "/monitoring/alerts":
+		return "/monitoring/alerts"
 	case path == "/items":
 		return "/items"
 	case strings.HasPrefix(path, "/items/"):
@@ -74,6 +76,8 @@ func useCaseLabel(method, route string) string {
 		return "analytics.get"
 	case "GET /analytics/stream":
 		return "analytics.stream"
+	case "GET /monitoring/alerts":
+		return "monitoring.alerts"
 	default:
 		return ""
 	}

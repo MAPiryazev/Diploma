@@ -160,13 +160,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(monitoring_large_amount_events_total[1m]))",
-          "legendFormat": "large amount events/s",
+          "expr": "sum by (rule_code, severity) (rate(monitoring_rule_matches_total[1m]))",
+          "legendFormat": "{{rule_code}} {{severity}}",
           "range": true,
           "refId": "B"
         }
       ],
-      "title": "Pressure and monitoring signal",
+      "title": "Pressure and risk rule signals",
       "type": "timeseries"
     }
   ],
@@ -185,6 +185,6 @@
   "timezone": "browser",
   "title": "Diploma API Quality",
   "uid": "diploma-app",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

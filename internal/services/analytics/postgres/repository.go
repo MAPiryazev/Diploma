@@ -3,7 +3,9 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	analyticsapp "github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/services/analytics/app"
 	"github.com/wb-go/wbf/dbpg"
 )
 
@@ -140,4 +142,74 @@ func (r *Repository) GetStreamStats(ctx context.Context, userID string, from, to
 	}
 
 	return stats, nil
+}
+
+func (r *Repository) ListMonitoringAlerts(
+	ctx context.Context,
+	userID string,
+	filter analyticsapp.MonitoringAlertsFilter,
+) ([]analyticsapp.MonitoringAlert, error) {
+	args := []any{userID}
+	query := `
+		SELECT
+			id::text,
+			transaction_id::text,
+			user_id::text,
+			rule_code,
+			severity,
+			reason,
+			event_time::text,
+			created_at::text
+		FROM monitoring_events
+		WHERE user_id = $1
+	`
+
+	if filter.Severity != "" {
+		args = append(args, filter.Severity)
+		query += fmt.Sprintf(" AND severity = $%d", len(args))
+	}
+	if filter.RuleCode != "" {
+		args = append(args, filter.RuleCode)
+		query += fmt.Sprintf(" AND rule_code = $%d", len(args))
+	}
+	if strings.TrimSpace(filter.From) != "" {
+		args = append(args, filter.From)
+		query += fmt.Sprintf(" AND event_time >= $%d::timestamptz", len(args))
+	}
+	if strings.TrimSpace(filter.To) != "" {
+		args = append(args, filter.To)
+		query += fmt.Sprintf(" AND event_time <= $%d::timestamptz", len(args))
+	}
+
+	args = append(args, filter.Limit)
+	query += fmt.Sprintf(" ORDER BY event_time DESC, created_at DESC LIMIT $%d", len(args))
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list monitoring alerts: %w", err)
+	}
+	defer rows.Close()
+
+	alerts := make([]analyticsapp.MonitoringAlert, 0)
+	for rows.Next() {
+		var alert analyticsapp.MonitoringAlert
+		if err := rows.Scan(
+			&alert.ID,
+			&alert.TransactionID,
+			&alert.UserID,
+			&alert.RuleCode,
+			&alert.Severity,
+			&alert.Reason,
+			&alert.EventTime,
+			&alert.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan monitoring alert: %w", err)
+		}
+		alerts = append(alerts, alert)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("monitoring alerts rows: %w", err)
+	}
+
+	return alerts, nil
 }

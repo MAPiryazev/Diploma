@@ -94,6 +94,14 @@ var (
 		},
 	)
 
+	monitoringRuleMatches = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "monitoring_rule_matches_total",
+			Help: "Risk monitoring rule matches grouped by rule code and severity.",
+		},
+		[]string{"rule_code", "severity"},
+	)
+
 	transactionProjectionApplied = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "transaction_projection_applied_total",
@@ -161,6 +169,10 @@ func ObserveKafkaConsumerKafkaProcessingLag(kafkaTime time.Time) {
 
 func RecordMonitoringLargeAmountEvent() {
 	monitoringLargeAmountEvents.Inc()
+}
+
+func RecordMonitoringRuleMatch(ruleCode, severity string) {
+	monitoringRuleMatches.WithLabelValues(labelOrUnknown(ruleCode), labelOrUnknown(severity)).Inc()
 }
 
 func RecordTransactionProjectionApplied(eventType string) {

@@ -9,7 +9,7 @@ services:
     env_file:
       - environment/.env
     environment:
-      LEDGER_DB_HOST: postgres
+      LEDGER_DB_HOST: postgres-ledger
       LEDGER_DB_PORT: "5432"
       KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
     ports:
@@ -21,7 +21,7 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      postgres:
+      postgres-ledger:
         condition: service_healthy
     networks:
       - backend
@@ -34,7 +34,7 @@ services:
     env_file:
       - environment/.env
     environment:
-      ANALYTICS_DB_HOST: postgres
+      ANALYTICS_DB_HOST: postgres-analytics
       ANALYTICS_DB_PORT: "5432"
       ANALYTICS_PORT: "8082"
     ports:
@@ -46,7 +46,7 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      postgres:
+      postgres-analytics:
         condition: service_healthy
     networks:
       - backend
@@ -59,7 +59,7 @@ services:
     env_file:
       - environment/.env
     environment:
-      LEDGER_DB_HOST: postgres
+      LEDGER_DB_HOST: postgres-ledger
       LEDGER_DB_PORT: "5432"
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
@@ -73,7 +73,9 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      postgres:
+      postgres-ledger:
+        condition: service_healthy
+      transaction-api:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -95,7 +97,7 @@ services:
       KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
       KAFKA_CONSUMER_GROUP_ID: ${PROJECTION_BUILDER_GROUP_ID:-diploma-projection-builder}
       CONSUMER_METRICS_PORT: "2112"
-      ANALYTICS_DB_HOST: postgres
+      ANALYTICS_DB_HOST: postgres-analytics
       ANALYTICS_DB_PORT: "5432"
     ports:
       - "${PROJECTION_BUILDER_METRICS_PORT:-2112}:2112"
@@ -106,7 +108,7 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      postgres:
+      postgres-analytics:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -128,7 +130,7 @@ services:
       KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
       KAFKA_CONSUMER_GROUP_ID: ${RISK_EVALUATION_GROUP_ID:-diploma-risk-evaluation}
       CONSUMER_METRICS_PORT: "2113"
-      ANALYTICS_DB_HOST: postgres
+      ANALYTICS_DB_HOST: postgres-analytics
       ANALYTICS_DB_PORT: "5432"
     ports:
       - "${RISK_EVALUATION_METRICS_PORT:-2113}:2113"
@@ -139,7 +141,7 @@ services:
       retries: 5
       start_period: 20s
     depends_on:
-      postgres:
+      postgres-analytics:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -148,18 +150,41 @@ services:
     networks:
       - backend
 
-  postgres:
+  postgres-ledger:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
       - environment/.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
     ports:
       - "${POSTGRES_HOST_PORT:-28436}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+      - postgres_ledger_data:/var/lib/postgresql/data
+      - ./docker/postgres/init/ledger:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+
+  postgres-analytics:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "${ANALYTICS_POSTGRES_HOST_PORT:-28437}:5432"
+    volumes:
+      - postgres_analytics_data:/var/lib/postgresql/data
+      - ./docker/postgres/init/analytics:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -271,7 +296,8 @@ services:
       - backend
 
 volumes:
-  postgres_data:
+  postgres_ledger_data:
+  postgres_analytics_data:
   kafka_data:
 
 networks:

@@ -1,6 +1,6 @@
 ledger_db:
   host: localhost
-  port: 5432
+  port: 28436
   user: ledger_app
   password: change-me-ledger
   name: salestracker_ledger
@@ -8,7 +8,7 @@ ledger_db:
 
 analytics_db:
   host: localhost
-  port: 5432
+  port: 28437
   user: analytics_app
   password: change-me-analytics
   name: salestracker_analytics

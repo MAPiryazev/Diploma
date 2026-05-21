@@ -8,7 +8,7 @@ ledger_db:
 
 analytics_db:
   host: localhost
-  port: 28436
+  port: 28437
   user: analytics_app
   password: analytics_app
   name: salestracker_analytics

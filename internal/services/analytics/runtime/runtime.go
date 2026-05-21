@@ -47,6 +47,7 @@ func Run(envPath string) error {
 	router.Handle("GET /ready", http.HandlerFunc(healthHandler.Ready))
 	router.Handle("GET /analytics", auth(http.HandlerFunc(handler.GetAnalytics)))
 	router.Handle("GET /analytics/stream", auth(http.HandlerFunc(handler.GetStreamAnalytics)))
+	router.Handle("GET /monitoring/alerts", auth(http.HandlerFunc(handler.GetMonitoringAlerts)))
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Analytics.Port),
@@ -120,4 +121,12 @@ func (a analyticsRepositoryAdapter) GetStreamStats(ctx context.Context, userID s
 		})
 	}
 	return out, nil
+}
+
+func (a analyticsRepositoryAdapter) ListMonitoringAlerts(
+	ctx context.Context,
+	userID string,
+	filter analyticsapp.MonitoringAlertsFilter,
+) ([]analyticsapp.MonitoringAlert, error) {
+	return a.repo.ListMonitoringAlerts(ctx, userID, filter)
 }
