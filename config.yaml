@@ -1,0 +1,49 @@
+ledger_db:
+  host: localhost
+  port: 28436
+  user: ledger_app
+  password: ledger_app
+  name: salestracker_ledger
+  sslmode: disable
+
+analytics_db:
+  host: localhost
+  port: 28437
+  user: analytics_app
+  password: analytics_app
+  name: salestracker_analytics
+  sslmode: disable
+
+server:
+  port: 8080
+  read_timeout: 10
+  write_timeout: 10
+
+app:
+  env: development
+  log_level: debug
+
+kafka:
+  brokers:
+    - localhost:9094
+  topic: transactions.events
+  dlq_topic: transactions.events.dlq
+  consumer_group_id: diploma-projection-builder
+
+consumer:
+  metrics_port: 2112
+
+analytics:
+  port: 8082
+
+relay:
+  port: 8083
+
+security:
+  auth_tokens:
+    - token: dev-token
+      user_id: 11111111-1111-1111-1111-111111111111
+      role: operator
+
+monitoring:
+  large_amount_threshold: 100000

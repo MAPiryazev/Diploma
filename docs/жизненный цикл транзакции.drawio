@@ -1,0 +1,59 @@
+<mxfile host="app.diagrams.net" agent="Cursor">
+  <diagram name="Жизненный цикл транзакции" id="FFFcWiMksNUCpe7BiQHQ">
+    <mxGraphModel dx="3555" dy="1038" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="client" parent="1" style="whiteSpace=wrap;html=1;rounded=0;strokeColor=#555555;fillColor=#f5f5f5;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;Клиент&lt;/font&gt;" vertex="1">
+          <mxGeometry height="70" width="170" x="-180" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="api" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#356859;fillColor=#e7f4ee;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;transaction-api&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;прием и валидация&lt;/font&gt;" vertex="1">
+          <mxGeometry height="90" width="220" x="280" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="ledger" parent="1" style="shape=datastore;whiteSpace=wrap;html=1;strokeColor=#8a6d3b;fillColor=#fff4cc;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;ledger БД&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;статус + event_outbox&lt;/font&gt;" vertex="1">
+          <mxGeometry height="100" width="230" x="770" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="bus" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#8a3b3b;fillColor=#ffe2e2;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;outbox-relay + Kafka&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;публикация transaction.created&lt;/font&gt;" vertex="1">
+          <mxGeometry height="90" width="240" x="1300" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="risk" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#356859;fillColor=#e7f4ee;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;risk-evaluation&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;решение approve / reject&lt;/font&gt;" vertex="1">
+          <mxGeometry height="90" width="220" x="1310" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="executor" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#356859;fillColor=#e7f4ee;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;transaction-executor&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;исполнение, обработка&lt;/font&gt;" vertex="1">
+          <mxGeometry height="100" width="250" x="770" y="635" as="geometry" />
+        </mxCell>
+        <mxCell id="readside" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#356859;fillColor=#e7f4ee;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;projection-builder&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size: 18px;&quot;&gt;витрина данных&lt;/font&gt;" vertex="1">
+          <mxGeometry height="100" width="300" x="150" y="635" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_client_api" edge="1" parent="1" source="client" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="api" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;создание транзакции&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.0149" y="40" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_api_ledger" edge="1" parent="1" source="api" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="ledger" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;запись в БД&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.037" y="30" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_ledger_bus" edge="1" parent="1" source="ledger" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="bus" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;публикация события&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.0164" y="45" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_bus_risk" edge="1" parent="1" source="bus" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="risk" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;асинхронная доставка&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_risk_executor" edge="1" parent="1" source="risk" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="executor" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;изменение статуса&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.0345" y="-35" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_executor_read" edge="1" parent="1" source="executor" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="readside" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;итоговый статус&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.0154" y="-40" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,348 @@
+name: diploma
+
+services:
+  transaction-api:
+    build:
+      context: .
+      target: server-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      LEDGER_DB_HOST: postgres-ledger
+      LEDGER_DB_PORT: "5432"
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+    ports:
+      - "${APP_HTTP_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-ledger:
+        condition: service_healthy
+    networks:
+      - backend
+
+  analytics-query:
+    build:
+      context: .
+      target: analytics-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      ANALYTICS_DB_HOST: postgres-analytics
+      ANALYTICS_DB_PORT: "5432"
+      ANALYTICS_PORT: "8082"
+    ports:
+      - "${ANALYTICS_PORT:-8082}:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-analytics:
+        condition: service_healthy
+    networks:
+      - backend
+
+  outbox-relay:
+    build:
+      context: .
+      target: relay-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      LEDGER_DB_HOST: postgres-ledger
+      LEDGER_DB_PORT: "5432"
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      RELAY_PORT: "8083"
+    ports:
+      - "${RELAY_PORT:-8083}:8083"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8083/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-ledger:
+        condition: service_healthy
+      transaction-api:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  projection-builder:
+    build:
+      context: .
+      target: projectionbuilder-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      KAFKA_CONSUMER_GROUP_ID: ${PROJECTION_BUILDER_GROUP_ID:-diploma-projection-builder}
+      CONSUMER_METRICS_PORT: "2112"
+      ANALYTICS_DB_HOST: postgres-analytics
+      ANALYTICS_DB_PORT: "5432"
+    ports:
+      - "${PROJECTION_BUILDER_METRICS_PORT:-2112}:2112"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2112/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-analytics:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  risk-evaluation:
+    build:
+      context: .
+      target: riskevaluation-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      LEDGER_DB_HOST: postgres-ledger
+      LEDGER_DB_PORT: "5432"
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      KAFKA_CONSUMER_GROUP_ID: ${RISK_EVALUATION_GROUP_ID:-diploma-risk-evaluation}
+      CONSUMER_METRICS_PORT: "2113"
+      ANALYTICS_DB_HOST: postgres-analytics
+      ANALYTICS_DB_PORT: "5432"
+    ports:
+      - "${RISK_EVALUATION_METRICS_PORT:-2113}:2113"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2113/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-ledger:
+        condition: service_healthy
+      postgres-analytics:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  transaction-executor:
+    build:
+      context: .
+      target: transactionexecutor-runtime
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      LEDGER_DB_HOST: postgres-ledger
+      LEDGER_DB_PORT: "5432"
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      KAFKA_DLQ_TOPIC: ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      KAFKA_CONSUMER_GROUP_ID: ${TRANSACTION_EXECUTOR_GROUP_ID:-diploma-transaction-executor}
+      CONSUMER_METRICS_PORT: "2114"
+      ANALYTICS_DB_HOST: postgres-analytics
+      ANALYTICS_DB_PORT: "5432"
+    ports:
+      - "${TRANSACTION_EXECUTOR_METRICS_PORT:-2114}:2114"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2114/ready >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      postgres-ledger:
+        condition: service_healthy
+      postgres-analytics:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  postgres-ledger:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "${POSTGRES_HOST_PORT:-28436}:5432"
+    volumes:
+      - postgres_ledger_data:/var/lib/postgresql/data
+      - ./docker/postgres/init/ledger:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+
+  postgres-analytics:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - environment/.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "${ANALYTICS_POSTGRES_HOST_PORT:-28437}:5432"
+    volumes:
+      - postgres_analytics_data:/var/lib/postgresql/data
+      - ./docker/postgres/init/analytics:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-9094}:9094"
+    environment:
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:${KAFKA_EXTERNAL_PORT:-9094}
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9094
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - backend
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      sh -c "kafka-topics --bootstrap-server kafka:9092
+      --create --if-not-exists --topic ${KAFKA_TRANSACTIONS_TOPIC:-transactions.events}
+      --replication-factor 1 --partitions ${KAFKA_TRANSACTIONS_PARTITIONS:-3} &&
+      kafka-topics --bootstrap-server kafka:9092
+      --create --if-not-exists --topic ${KAFKA_DLQ_TOPIC:-transactions.events.dlq}
+      --replication-factor 1 --partitions 1"
+    networks:
+      - backend
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    profiles: ["observability"]
+    command:
+      - "--kafka.server=kafka:9092"
+    ports:
+      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - backend
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["observability"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      transaction-api:
+        condition: service_healthy
+      analytics-query:
+        condition: service_healthy
+      outbox-relay:
+        condition: service_healthy
+      projection-builder:
+        condition: service_healthy
+      risk-evaluation:
+        condition: service_healthy
+      transaction-executor:
+        condition: service_healthy
+      kafka-exporter:
+        condition: service_started
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    profiles: ["observability"]
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: dark
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3000}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - backend
+
+volumes:
+  postgres_ledger_data:
+  postgres_analytics_data:
+  kafka_data:
+
+networks:
+  backend:
+    name: diploma_backend

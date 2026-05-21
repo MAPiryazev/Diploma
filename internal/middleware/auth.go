@@ -1,0 +1,97 @@
+package middleware
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/authjwt"
+	"github.com/MAPiryazev/Wildberries_L1/tree/main/L3/L3.6/internal/config"
+)
+
+const authorizationHeader = "Authorization"
+
+type Principal struct {
+	UserID string
+	Role   string
+	Token  string
+}
+
+const principalContextKey contextKey = "principal"
+
+func BearerAuth(tokens []config.AuthToken) func(http.Handler) http.Handler {
+	return JWTAuth("", tokens)
+}
+
+func JWTAuth(secret string, legacyTokens []config.AuthToken) func(http.Handler) http.Handler {
+	byToken := make(map[string]Principal, len(legacyTokens))
+	for _, token := range legacyTokens {
+		if strings.TrimSpace(token.Token) == "" || strings.TrimSpace(token.UserID) == "" {
+			continue
+		}
+		role := strings.TrimSpace(token.Role)
+		if role == "" {
+			role = "operator"
+		}
+		byToken[token.Token] = Principal{
+			UserID: token.UserID,
+			Role:   role,
+			Token:  token.Token,
+		}
+	}
+	secret = strings.TrimSpace(secret)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw := strings.TrimSpace(r.Header.Get(authorizationHeader))
+			if raw == "" {
+				writeAuthError(w, http.StatusUnauthorized, "missing bearer token")
+				return
+			}
+
+			token, ok := strings.CutPrefix(raw, "Bearer ")
+			if !ok || strings.TrimSpace(token) == "" {
+				writeAuthError(w, http.StatusUnauthorized, "invalid authorization header")
+				return
+			}
+
+			token = strings.TrimSpace(token)
+			if secret != "" {
+				claims, err := authjwt.Parse(secret, token, time.Now())
+				if err == nil {
+					ctx := context.WithValue(r.Context(), principalContextKey, Principal{
+						UserID: claims.UserID,
+						Role:   claims.Role,
+						Token:  token,
+					})
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			principal, ok := byToken[token]
+			if !ok {
+				writeAuthError(w, http.StatusUnauthorized, "invalid bearer token")
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), principalContextKey, principal)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func GetPrincipal(ctx context.Context) (Principal, bool) {
+	if ctx == nil {
+		return Principal{}, false
+	}
+	principal, ok := ctx.Value(principalContextKey).(Principal)
+	return principal, ok
+}
+
+func writeAuthError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`{"status":"error","message":"` + message + `"}`))
+}

@@ -1,0 +1,37 @@
+<mxfile host="app.diagrams.net" agent="Cursor">
+  <diagram id="outbox" name="Transactional Outbox">
+    <mxGraphModel dx="3733" dy="1133" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="500" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="proc_api" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#356859;fillColor=#e7f4ee;strokeWidth=2;" value="&lt;span style=&quot;font-size: 22px;&quot;&gt;Сервис приема транзакций&lt;/span&gt;" vertex="1">
+          <mxGeometry height="100" width="280" x="-137" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="ds_ledger" parent="1" style="shape=datastore;whiteSpace=wrap;html=1;strokeColor=#8a6d3b;fillColor=#fff4cc;strokeWidth=2;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;PostgreSQL&amp;nbsp;&lt;br&gt;таблица событий&lt;/font&gt;" vertex="1">
+          <mxGeometry height="115" width="340" x="399" y="182" as="geometry" />
+        </mxCell>
+        <mxCell id="proc_relay" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#356859;fillColor=#e7f4ee;strokeWidth=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;Сервис передачи событий&lt;/font&gt;" vertex="1">
+          <mxGeometry height="100" width="280" x="970" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="ds_kafka" parent="1" style="shape=datastore;whiteSpace=wrap;html=1;strokeColor=#8a3b3b;fillColor=#ffe2e2;strokeWidth=2;" value="&lt;font style=&quot;font-size: 20px;&quot;&gt;Kafka&lt;br&gt;transactions.events&lt;/font&gt;" vertex="1">
+          <mxGeometry height="100" width="300" x="1520" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="f_api_ledger" edge="1" parent="1" source="proc_api" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="ds_ledger" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;транзакция БД&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.0025" y="20" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f_ledger_relay" edge="1" parent="1" source="ds_ledger" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="proc_relay" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;события из outbox&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.002" y="-20" as="geometry">
+            <mxPoint y="-40" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f_relay_kafka" edge="1" parent="1" source="proc_relay" style="endArrow=block;rounded=0;fontSize=18;edgeStyle=orthogonalEdgeStyle;strokeWidth=2;html=1;" target="ds_kafka" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;публикация события&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.05" y="15" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
